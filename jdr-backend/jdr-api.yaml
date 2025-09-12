@@ -1,0 +1,352 @@
+openapi: 3.1.0
+info:
+  title: JDR Narratif Persistant
+  version: 1.4.1
+servers:
+  - url: https://jdr-backend.onrender.com/api
+paths:
+  /pnjs:
+    get:
+      operationId: listPnjs
+      summary: Liste des PNJ
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/PNJ' }
+    post:
+      operationId: createPnj
+      summary: Créer un PNJ
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PNJ' }
+      responses:
+        '201':
+          description: Créé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PNJ' }
+
+  /pnjs/{id}:
+    put:
+      operationId: updatePnj
+      summary: Mettre à jour un PNJ
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PNJ' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PNJ' }
+
+  /pnjs/{id}/award-xp:
+    post:
+      operationId: awardXp
+      summary: Ajouter de l’XP
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                xp: { type: integer, minimum: 1 }
+              required: [xp]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PNJ' }
+
+  /pnjs/{id}/level-up:
+    post:
+      operationId: levelUp
+      summary: Monter de niveau si possible
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LevelUpResult'
+
+  /pnjs/{id}/evolve:
+    post:
+      operationId: evolve
+      summary: Faire évoluer la race
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                targetRaceId: { type: string }
+                justification: { type: string }
+              required: [targetRaceId]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PNJ' }
+
+  /races:
+    get:
+      operationId: listRaces
+      summary: Liste des races
+      parameters:
+        - name: canon
+          in: query
+          schema: { type: boolean }
+        - name: family
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Race' }
+
+  /races/{raceId}/evolutions:
+    get:
+      operationId: getRaceEvolutions
+      summary: Chemins d’évolution d’une race
+      parameters:
+        - name: raceId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EvolutionPath' }
+
+  /story/state:
+    get:
+      operationId: getStoryState
+      summary: Lire l’état d’histoire
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StoryState' }
+    post:
+      operationId: updateStoryState
+      summary: Mettre à jour l’état d’histoire
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StoryState' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StoryState' }
+
+  /style:
+    post:
+      operationId: setNarrativeStyle
+      summary: Définir le style narratif
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                styleText: { type: string }
+              required: [styleText]
+      responses:
+        '200':
+          description: OK
+
+  /generate/scene:
+    post:
+      operationId: generateScene
+      summary: Générer une scène
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt: { type: string }
+              required: [prompt]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  narrativeText: { type: string }
+
+  /roll:
+    post:
+      operationId: rollDice
+      summary: Jet de dés NdM±K (ex. 1d20+3)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                dice: { type: string }
+              required: [dice]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RollResult'
+
+components:
+  schemas:
+    PNJ:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        personalityTraits:
+          type: array
+          items: { type: string }
+        backstory: { type: string }
+        appearance: { type: string }
+        raceId: { type: string }
+        raceName: { type: string }
+        evolutionStage: { type: string }
+        evolutionHistory:
+          type: array
+          items: { type: string }
+        level: { type: integer, minimum: 1, default: 1 }
+        xp: { type: integer, minimum: 0, default: 0 }
+        xpToNext: { type: integer, minimum: 0 }
+        stats:
+          type: object
+          properties:
+            hp: { type: integer }
+            mp: { type: integer }
+            strength: { type: integer }
+            defense: { type: integer }
+            magic: { type: integer }
+            speed: { type: integer }
+            resistance: { type: integer }
+            charisma: { type: integer }
+        skills:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              tier: { type: string, enum: [Extra, Unique, Ultimate] }
+              effect: { type: string }
+              level: { type: integer }
+        locationId: { type: string }
+        isCanon: { type: boolean, default: false }
+
+    Race:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        family: { type: string }
+        canon: { type: boolean }
+        description: { type: string }
+        baseStats:
+          type: object
+          properties:
+            hp: { type: integer }
+            mp: { type: integer }
+            strength: { type: integer }
+            defense: { type: integer }
+            magic: { type: integer }
+            speed: { type: integer }
+            resistance: { type: integer }
+            charisma: { type: integer }
+        evolutionPaths:
+          type: array
+          items: { $ref: '#/components/schemas/EvolutionPath' }
+
+    EvolutionPath:
+      type: object
+      properties:
+        toRaceId: { type: string }
+        minLevel: { type: integer }
+        conditions:
+          type: array
+          items: { type: string }
+
+    StoryState:
+      type: object
+      properties:
+        currentLocation: { type: string }
+        currentZoneId: { type: string }
+        charactersInScene:
+          type: array
+          items: { type: string }
+        recentEvents:
+          type: array
+          items: { type: string }
+        discoveredZones:
+          type: array
+          items: { type: string }
+        worldState:
+          type: object
+          additionalProperties: true
+
+    RollResult:
+      type: object
+      properties:
+        result: { type: integer }
+        rolls:
+          type: array
+          items: { type: integer }
+        modifier: { type: integer }
+        formula: { type: string }
+
