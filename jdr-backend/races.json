@@ -1,0 +1,190 @@
+[
+  {
+    "id": "slime",
+    "name": "Slime",
+    "family": "slime",
+    "canon": true,
+    "description": "Créature gélatineuse adaptable.",
+    "baseStats": { "hp": 90, "mp": 80, "strength": 6, "defense": 8, "magic": 12, "speed": 10, "resistance": 12, "charisma": 8 },
+    "evolutionPaths": [
+      { "toRaceId": "demon-slime", "minLevel": 20, "conditions": ["Nomination/afflux de magicules"] }
+    ]
+  },
+  {
+    "id": "demon-slime",
+    "name": "Demon Slime",
+    "family": "slime",
+    "canon": true,
+    "description": "Slime transcendé par énergie démoniaque.",
+    "baseStats": { "hp": 120, "mp": 140, "strength": 12, "defense": 12, "magic": 22, "speed": 14, "resistance": 18, "charisma": 12 },
+    "evolutionPaths": [
+      { "toRaceId": "true-demon-lord", "minLevel": 50, "conditions": ["Rituel/conditions Seigneur-Démon"] }
+    ]
+  },
+  {
+    "id": "true-demon-lord",
+    "name": "True Demon Lord",
+    "family": "demon",
+    "canon": true,
+    "description": "Transcendance démoniaque ultime.",
+    "baseStats": { "hp": 200, "mp": 250, "strength": 22, "defense": 20, "magic": 40, "speed": 22, "resistance": 28, "charisma": 20 },
+    "evolutionPaths": []
+  },
+  {
+    "id": "human",
+    "name": "Human",
+    "family": "humanoid",
+    "canon": true,
+    "description": "Grande diversité de classes et d'aptitudes.",
+    "baseStats": { "hp": 90, "mp": 40, "strength": 10, "defense": 10, "magic": 8, "speed": 10, "resistance": 9, "charisma": 10 },
+    "evolutionPaths": [
+      { "toRaceId": "awakened-human", "minLevel": 35, "conditions": ["Puissance magique extrême", "Conditions spéciales"] }
+    ]
+  },
+  {
+    "id": "awakened-human",
+    "name": "Awakened Human",
+    "family": "humanoid",
+    "canon": true,
+    "description": "Humain éveillé qui a transcendé ses limites.",
+    "baseStats": { "hp": 130, "mp": 120, "strength": 18, "defense": 15, "magic": 20, "speed": 15, "resistance": 14, "charisma": 14 },
+    "evolutionPaths": []
+  },
+  {
+    "id": "goblin",
+    "name": "Goblin",
+    "family": "goblin",
+    "canon": true,
+    "description": "Faible mais capable d'évoluer après nomination.",
+    "baseStats": { "hp": 70, "mp": 20, "strength": 8, "defense": 6, "magic": 4, "speed": 10, "resistance": 6, "charisma": 6 },
+    "evolutionPaths": [
+      { "toRaceId": "hobgoblin", "minLevel": 5, "conditions": ["Nomination/bénédiction"] }
+    ]
+  },
+  {
+    "id": "hobgoblin",
+    "name": "Hobgoblin",
+    "family": "goblin",
+    "canon": true,
+    "description": "Gobelin nommé et renforcé.",
+    "baseStats": { "hp": 100, "mp": 30, "strength": 12, "defense": 10, "magic": 6, "speed": 12, "resistance": 10, "charisma": 8 },
+    "evolutionPaths": [
+      { "toRaceId": "kijin", "minLevel": 15, "conditions": ["Nomination soutenue/rituels"] }
+    ]
+  },
+  {
+    "id": "kijin",
+    "name": "Kijin",
+    "family": "oni",
+    "canon": true,
+    "description": "Ogre nommé évolué (oni).",
+    "baseStats": { "hp": 130, "mp": 60, "strength": 18, "defense": 14, "magic": 10, "speed": 14, "resistance": 14, "charisma": 12 },
+    "evolutionPaths": []
+  },
+  {
+    "id": "small-taratect",
+    "name": "Small Taratect",
+    "family": "arachnid",
+    "canon": true,
+    "description": "Une petite araignée magique.",
+    "baseStats": { "hp": 60, "mp": 30, "strength": 8, "defense": 6, "magic": 6, "speed": 12, "resistance": 6, "charisma": 4 },
+    "evolutionPaths": [
+      { "toRaceId": "taratect", "minLevel": 5, "conditions": ["Croissance naturelle"] }
+    ]
+  },
+  {
+    "id": "taratect",
+    "name": "Taratect",
+    "family": "arachnid",
+    "canon": true,
+    "description": "Version adulte d’un Taratect.",
+    "baseStats": { "hp": 120, "mp": 60, "strength": 16, "defense": 12, "magic": 12, "speed": 14, "resistance": 12, "charisma": 5 },
+    "evolutionPaths": [
+      { "toRaceId": "greater-taratect", "minLevel": 15, "conditions": ["Croissance naturelle"] }
+    ]
+  },
+  {
+    "id": "greater-taratect",
+    "name": "Greater Taratect",
+    "family": "arachnid",
+    "canon": true,
+    "description": "Taratect plus puissant, avec une carapace renforcée.",
+    "baseStats": { "hp": 180, "mp": 100, "strength": 22, "defense": 18, "magic": 18, "speed": 16, "resistance": 16, "charisma": 6 },
+    "evolutionPaths": [
+      { "toRaceId": "arch-taratect", "minLevel": 30, "conditions": ["Accumulation de magicules"] }
+    ]
+  },
+  {
+    "id": "arch-taratect",
+    "name": "Arch Taratect",
+    "family": "arachnid",
+    "canon": true,
+    "description": "Variante avancée du Taratect, intelligente et redoutable.",
+    "baseStats": { "hp": 260, "mp": 180, "strength": 30, "defense": 25, "magic": 28, "speed": 20, "resistance": 22, "charisma": 8 },
+    "evolutionPaths": [
+      { "toRaceId": "queen-taratect", "minLevel": 50, "conditions": ["Mutation royale ou bénédiction spéciale"] }
+    ]
+  },
+  {
+    "id": "queen-taratect",
+    "name": "Queen Taratect",
+    "family": "arachnid",
+    "canon": true,
+    "description": "La forme royale et la plus puissante des Taratect.",
+    "baseStats": { "hp": 400, "mp": 300, "strength": 50, "defense": 40, "magic": 45, "speed": 25, "resistance": 35, "charisma": 12 },
+    "evolutionPaths": []
+  },
+  {
+    "id": "lesser-fake-dragon",
+    "name": "Lesser Fake Dragon",
+    "family": "dragon",
+    "canon": true,
+    "description": "Un faux dragon de rang inférieur.",
+    "baseStats": { "hp": 200, "mp": 100, "strength": 30, "defense": 20, "magic": 25, "speed": 15, "resistance": 20, "charisma": 10 },
+    "evolutionPaths": [
+      { "toRaceId": "medium-fake-dragon", "minLevel": 20, "conditions": ["Accumulation de magicules"] }
+    ]
+  },
+  {
+    "id": "medium-fake-dragon",
+    "name": "Medium Fake Dragon",
+    "family": "dragon",
+    "canon": true,
+    "description": "Un faux dragon de rang moyen.",
+    "baseStats": { "hp": 300, "mp": 200, "strength": 45, "defense": 35, "magic": 40, "speed": 20, "resistance": 30, "charisma": 12 },
+    "evolutionPaths": [
+      { "toRaceId": "arch-fake-dragon", "minLevel": 35, "conditions": ["Accumulation intense de magicules"] }
+    ]
+  },
+  {
+    "id": "arch-fake-dragon",
+    "name": "Arch Fake Dragon",
+    "family": "dragon",
+    "canon": true,
+    "description": "Faux dragon évolué à un stade avancé.",
+    "baseStats": { "hp": 450, "mp": 350, "strength": 65, "defense": 55, "magic": 60, "speed": 25, "resistance": 45, "charisma": 15 },
+    "evolutionPaths": [
+      { "toRaceId": "element-dragon", "minLevel": 50, "conditions": ["Titre spécial ou bénédiction"] }
+    ]
+  },
+  {
+    "id": "element-dragon",
+    "name": "Element Dragon",
+    "family": "dragon",
+    "canon": true,
+    "description": "Faux dragon qui a obtenu un élément et atteint un statut supérieur.",
+    "baseStats": { "hp": 600, "mp": 500, "strength": 90, "defense": 80, "magic": 100, "speed": 35, "resistance": 70, "charisma": 20 },
+    "evolutionPaths": [
+      { "toRaceId": "dragon-lord", "minLevel": 80, "conditions": ["Transcendance et reconnaissance divine"] }
+    ]
+  },
+  {
+    "id": "dragon-lord",
+    "name": "Dragon Lord",
+    "family": "dragon",
+    "canon": true,
+    "description": "Un faux dragon ayant atteint une puissance comparable aux vrais dragons.",
+    "baseStats": { "hp": 900, "mp": 800, "strength": 130, "defense": 110, "magic": 150, "speed": 45, "resistance": 100, "charisma": 30 },
+    "evolutionPaths": []
+  }
+]
