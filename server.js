@@ -182,14 +182,30 @@ app.post('/api/races', (req, res) => {
   res.status(201).json(race);
 });
 
-app.put('/api/races/:id', (req, res) => {
-  const i = races.findIndex(r => r.id === req.params.id);
-  if (i === -1) return res.status(404).json({ message: 'Race non trouvée' });
-  const updated = { ...races[i], ...req.body, id: races[i].id };
-  races[i] = updated;
-  saveRaces();
-  res.json(updated);
+app.put('/api/pnjs/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
+    const current = rows[0].data;
+    const locks = new Set(current.lockedTraits || []);
+    const incoming = { ...req.body };
+
+    // Empêcher la modif des champs verrouillés
+    for (const f of locks) {
+      if (f in incoming && JSON.stringify(incoming[f]) !== JSON.stringify(current[f])) {
+        delete incoming[f];
+      }
+    }
+
+    const merged = { ...current, ...incoming, id };
+    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
+    res.json(merged);
+  } catch (e) {
+    console.error(e); res.status(500).json({ message: 'DB error' });
+  }
 });
+
 
 app.delete('/api/races/:id', (req, res) => {
   const i = races.findIndex(r => r.id === req.params.id);
@@ -203,6 +219,7 @@ app.delete('/api/races/:id', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
