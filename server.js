@@ -66,6 +66,22 @@ app.get('/api/pnjs', async (req, res) => {
   }
 });
 
+// Créer PNJ
+app.post('/api/pnjs', async (req, res) => {
+  try {
+    const p = req.body || {};
+    p.id = p.id || Date.now().toString();
+    if (!p.level) p.level = 1;
+    if (!Number.isFinite(p.xp)) p.xp = 0;
+    p.stats = p.stats || {};
+    await pool.query('INSERT INTO pnjs (id, data) VALUES ($1, $2::jsonb)', [p.id, JSON.stringify(p)]);
+    res.status(201).json(p);
+  } catch (e) {
+    console.error(e); res.status(500).json({ message: 'DB error' });
+  }
+});
+
+
 // ---- Ajouter XP
 app.post('/api/pnjs/:id/award-xp', async (req, res) => {
   try {
@@ -170,13 +186,23 @@ app.post('/api/pnjs/:id/evolve', async (req, res) => {
   }
 });
 
-
 app.put('/api/pnjs/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
     if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
-    const merged = { ...rows[0].data, ...req.body, id };
+    const current = rows[0].data;
+    const locks = new Set(current.lockedTraits || []);
+    const incoming = { ...req.body };
+
+    // Empêcher la modif des champs verrouillés
+    for (const f of locks) {
+      if (f in incoming && JSON.stringify(incoming[f]) !== JSON.stringify(current[f])) {
+        delete incoming[f];
+      }
+    }
+
+    const merged = { ...current, ...incoming, id };
     await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
     res.json(merged);
   } catch (e) {
@@ -348,31 +374,6 @@ app.post('/api/races', (req, res) => {
   res.status(201).json(race);
 });
 
-app.put('/api/pnjs/:id', async (req, res) => {
-  try {
-    const id = req.params.id;
-    const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
-    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
-    const current = rows[0].data;
-    const locks = new Set(current.lockedTraits || []);
-    const incoming = { ...req.body };
-
-    // Empêcher la modif des champs verrouillés
-    for (const f of locks) {
-      if (f in incoming && JSON.stringify(incoming[f]) !== JSON.stringify(current[f])) {
-        delete incoming[f];
-      }
-    }
-
-    const merged = { ...current, ...incoming, id };
-    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
-    res.json(merged);
-  } catch (e) {
-    console.error(e); res.status(500).json({ message: 'DB error' });
-  }
-});
-
-
 app.delete('/api/races/:id', (req, res) => {
   const i = races.findIndex(r => r.id === req.params.id);
   if (i === -1) return res.status(404).json({ message: 'Race non trouvée' });
@@ -391,14 +392,6 @@ app.delete('/api/races/:id', (req, res) => {
   `);
   console.log('Table canon_profiles OK');
 })().catch(console.error);
-
-function slugifyId(str) {
-  return String(str || '')
-    .toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
-    .replace(/[^a-z0-9]+/g,'-')
-    .replace(/(^-|-$)/g,'') || Date.now().toString();
-}
 
 app.get('/api/canon', async (req, res) => {
   try {
@@ -451,6 +444,7 @@ app.delete('/api/canon/:canonId', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
