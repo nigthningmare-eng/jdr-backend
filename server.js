@@ -194,6 +194,82 @@ app.get('/api/pnjs/export', async (req, res) => {
   }
 });
 
+// Lier un PNJ à un profil canon
+app.post('/api/pnjs/:id/bind-canon', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const canonId = String(req.body?.canonId || '');
+    if (!canonId) return res.status(400).json({ message: 'canonId requis' });
+
+    const pRes = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (!pRes.rows.length) return res.status(404).json({ message: 'PNJ non trouvé' });
+
+    const cRes = await pool.query('SELECT data FROM canon_profiles WHERE id = $1', [canonId]);
+    if (!cRes.rows.length) return res.status(404).json({ message: 'Profil canon non trouvé' });
+
+    const p = pRes.rows[0].data;
+    p.canonId = canonId;
+    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(p)]);
+    res.json(p);
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+// Verrouiller des champs du PNJ
+app.post('/api/pnjs/:id/lock-traits', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const fields = Array.isArray(req.body?.fields) ? req.body.fields : null;
+    if (!fields || !fields.length) return res.status(400).json({ message: 'fields[] requis' });
+
+    const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé' });
+
+    const p = rows[0].data;
+    const set = new Set(p.lockedTraits || []);
+    for (const f of fields) set.add(String(f));
+    p.lockedTraits = Array.from(set);
+
+    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(p)]);
+    res.json(p);
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+// Contrôle de cohérence (simple)
+app.get('/api/pnjs/:id/consistency', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const pRes = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (!pRes.rows.length) return res.status(404).json({ message: 'PNJ non trouvé' });
+    const p = pRes.rows[0].data;
+
+    if (!p.canonId) return res.json({ passed: true, conflicts: [], suggestions: ['Aucun canon lié.'] });
+
+    const cRes = await pool.query('SELECT data FROM canon_profiles WHERE id = $1', [p.canonId]);
+    if (!cRes.rows.length) return res.json({ passed: false, conflicts: [{ field: 'canonId', expected: 'Profil existant', found: 'introuvable', severity: 'high' }], suggestions: ['Vérifier canonId'] });
+
+    const c = cRes.rows[0].data;
+    const conflicts = [];
+
+    // Comparaisons simples (tu peux enrichir)
+    if (c.appearance && p.appearance && c.appearance !== p.appearance) {
+      conflicts.push({ field: 'appearance', expected: c.appearance, found: p.appearance, severity: 'medium' });
+    }
+    if (Array.isArray(c.personalityTraits) && Array.isArray(p.personalityTraits)) {
+      const missing = c.personalityTraits.filter(t => !p.personalityTraits.includes(t));
+      if (missing.length) conflicts.push({ field: 'personalityTraits', expected: c.personalityTraits.join(', '), found: p.personalityTraits.join(', '), severity: 'low' });
+    }
+    // (skills check léger)
+    if (Array.isArray(c.skills) && Array.isArray(p.skills)) {
+      const cSkillNames = new Set(c.skills.map(s => s.name));
+      const pSkillNames = new Set(p.skills.map(s => s.name));
+      for (const s of cSkillNames) if (!pSkillNames.has(s)) conflicts.push({ field: 'skills', expected: `inclure ${s}`, found: 'absent', severity: 'low' });
+    }
+
+    res.json({ passed: conflicts.length === 0, conflicts, suggestions: [] });
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+
 // =================== STORY / STYLE / SCENE ====================
 app.get('/api/story/state', (req, res) => { res.json(storyState); });
 
@@ -305,10 +381,77 @@ app.delete('/api/races/:id', (req, res) => {
   res.json(removed);
 });
 
+// ===== Canon Profiles (PostgreSQL) =====
+(async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS canon_profiles (
+      id TEXT PRIMARY KEY,
+      data JSONB NOT NULL
+    );
+  `);
+  console.log('Table canon_profiles OK');
+})().catch(console.error);
+
+function slugifyId(str) {
+  return String(str || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^a-z0-9]+/g,'-')
+    .replace(/(^-|-$)/g,'') || Date.now().toString();
+}
+
+app.get('/api/canon', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT data FROM canon_profiles');
+    res.json(rows.map(r => r.data));
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+app.post('/api/canon', async (req, res) => {
+  try {
+    const c = req.body || {};
+    if (!c.name) return res.status(400).json({ message: 'name requis' });
+    c.id = c.id || slugifyId(c.name);
+    await pool.query('INSERT INTO canon_profiles (id, data) VALUES ($1, $2::jsonb)', [c.id, JSON.stringify(c)]);
+    res.status(201).json(c);
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+app.get('/api/canon/:canonId', async (req, res) => {
+  try {
+    const id = req.params.canonId;
+    const { rows } = await pool.query('SELECT data FROM canon_profiles WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'Canon non trouvé' });
+    res.json(rows[0].data);
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+app.put('/api/canon/:canonId', async (req, res) => {
+  try {
+    const id = req.params.canonId;
+    const { rows } = await pool.query('SELECT data FROM canon_profiles WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'Canon non trouvé' });
+    const merged = { ...rows[0].data, ...req.body, id };
+    await pool.query('UPDATE canon_profiles SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
+    res.json(merged);
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+app.delete('/api/canon/:canonId', async (req, res) => {
+  try {
+    const id = req.params.canonId;
+    const { rows } = await pool.query('DELETE FROM canon_profiles WHERE id = $1 RETURNING data', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'Canon non trouvé' });
+    res.json(rows[0].data);
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+
 // ---------------- Lancement ----------------
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
