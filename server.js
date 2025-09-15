@@ -66,20 +66,110 @@ app.get('/api/pnjs', async (req, res) => {
   }
 });
 
-app.post('/api/pnjs', async (req, res) => {
+// ---- Ajouter XP
+app.post('/api/pnjs/:id/award-xp', async (req, res) => {
   try {
-    const p = req.body || {};
-    p.id = p.id || Date.now().toString();
-    // init défauts utiles
-    if (!p.level) p.level = 1;
-    if (!Number.isFinite(p.xp)) p.xp = 0;
-    p.stats = p.stats || {};
-    await pool.query('INSERT INTO pnjs (id, data) VALUES ($1, $2::jsonb)', [p.id, JSON.stringify(p)]);
-    res.status(201).json(p);
+    const xp = Number(req.body?.xp || 0);
+    if (!Number.isFinite(xp) || xp <= 0) return res.status(400).json({ message: 'xp invalide' });
+    const id = req.params.id;
+    const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
+    const p = rows[0].data;
+    p.xp = (p.xp || 0) + xp;
+    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(p)]);
+    res.json(p);
   } catch (e) {
     console.error(e); res.status(500).json({ message: 'DB error' });
   }
 });
+
+// ---- Level-up
+app.post('/api/pnjs/:id/level-up', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
+    const p = rows[0].data;
+    p.level = p.level || 1;
+    p.xp = p.xp || 0;
+    p.stats = p.stats || { hp: 100, mp: 50, strength: 10, defense: 10, magic: 10, speed: 10, resistance: 10, charisma: 10 };
+
+    let oldLevel = p.level;
+    let statIncreases = { hp: 0, mp: 0, strength: 0, defense: 0, magic: 0, speed: 0, resistance: 0, charisma: 0 };
+
+    const xpThreshold = lvl => 100 * lvl;
+    while (p.xp >= xpThreshold(p.level)) {
+      p.xp -= xpThreshold(p.level);
+      p.level += 1;
+      // Bonus stats simple (ajuste à ta sauce)
+      p.stats.hp += 5; statIncreases.hp += 5;
+      p.stats.mp += 5; statIncreases.mp += 5;
+      p.stats.strength += 1; statIncreases.strength += 1;
+      p.stats.defense += 1; statIncreases.defense += 1;
+      p.stats.magic += 1; statIncreases.magic += 1;
+      p.stats.speed += 1; statIncreases.speed += 1;
+      p.stats.resistance += 1; statIncreases.resistance += 1;
+      p.stats.charisma += 1; statIncreases.charisma += 1;
+      // stop anti-boucle déraisonnable
+      if (p.level - oldLevel > 50) break;
+    }
+
+    const result = {
+      oldLevel,
+      newLevel: p.level,
+      xp: p.xp,
+      xpToNext: Math.max(0, (100 * p.level) - p.xp),
+      statIncreases
+    };
+
+    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(p)]);
+    res.json(result);
+  } catch (e) {
+    console.error(e); res.status(500).json({ message: 'DB error' });
+  }
+});
+
+// ---- Evolve (vérifie races.json)
+app.post('/api/pnjs/:id/evolve', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const targetRaceId = String(req.body?.targetRaceId || '');
+    if (!targetRaceId) return res.status(400).json({ message: 'targetRaceId requis' });
+
+    const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
+    const p = rows[0].data;
+    p.level = p.level || 1;
+    p.evolutionHistory = Array.isArray(p.evolutionHistory) ? p.evolutionHistory : [];
+
+    const currentRace = races.find(r => r.id === p.raceId);
+    const targetRace = races.find(r => r.id === targetRaceId);
+    if (!targetRace) return res.status(404).json({ message: 'Race cible inconnue' });
+
+    // Conditions : doit exister un chemin depuis la race actuelle vers targetRaceId
+    let ok = false;
+    if (currentRace && Array.isArray(currentRace.evolutionPaths)) {
+      for (const path of currentRace.evolutionPaths) {
+        if (path.toRaceId === targetRaceId) {
+          const minLevel = path.minLevel || 0;
+          if (p.level >= minLevel) ok = true;
+          // (Tu peux enrichir avec vérifs sur 'conditions')
+        }
+      }
+    }
+    if (!ok) return res.status(400).json({ message: 'Conditions d’évolution non remplies' });
+
+    // Appliquer l’évolution
+    p.raceId = targetRace.id;
+    p.raceName = targetRace.name;
+    p.evolutionHistory.push(`${currentRace ? currentRace.id : 'unknown'} -> ${targetRace.id}`);
+    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(p)]);
+    res.json(p);
+  } catch (e) {
+    console.error(e); res.status(500).json({ message: 'DB error' });
+  }
+});
+
 
 app.put('/api/pnjs/:id', async (req, res) => {
   try {
@@ -219,6 +309,7 @@ app.delete('/api/races/:id', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
