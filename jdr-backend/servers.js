@@ -12,6 +12,10 @@ let pnjs = require('./pnjs.json');
 let storyState = require('./storyState.json');
 let narrativeStyle = { styleText: "" };
 
+function savePnjs() {
+  fs.writeFileSync('./pnjs.json', JSON.stringify(pnjs, null, 2), 'utf-8');
+}
+
 // Liste PNJs
 app.get('/api/pnjs', (req, res) => {
   res.json(pnjs);
@@ -25,6 +29,7 @@ app.post('/api/pnjs', (req, res) => {
   }
   newPnj.id = Date.now().toString();
   pnjs.push(newPnj);
+  savePnjs(); 
   res.status(201).json(newPnj);
 });
 
@@ -34,6 +39,7 @@ app.put('/api/pnjs/:id', (req, res) => {
   const index = pnjs.findIndex(p => p.id === id);
   if (index === -1) return res.status(404).json({ message: 'PNJ non trouvé.' });
   pnjs[index] = { ...pnjs[index], ...req.body };
+  savePnjs();
   res.json(pnjs[index]);
 });
 
@@ -64,6 +70,7 @@ app.post('/api/generate/scene', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
