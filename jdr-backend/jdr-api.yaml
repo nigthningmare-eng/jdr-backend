@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
-  title: JDR Narratif Persistant
-  version: 1.4.1
+  title: JDR Narratif Persistant (PNJ + Races + XP/Evolve + Canon)
+  version: 1.6.0
 servers:
   - url: https://jdr-backend.onrender.com/api
 paths:
@@ -10,13 +10,14 @@ paths:
       operationId: listPnjs
       summary: Liste des PNJ
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/PNJ' }
+                items:
+                  $ref: "#/components/schemas/PNJ"
     post:
       operationId: createPnj
       summary: Créer un PNJ
@@ -24,86 +25,36 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/PNJ' }
+            schema:
+              $ref: "#/components/schemas/PNJ"
       responses:
-        '201':
+        "201":
           description: Créé
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/PNJ' }
-
+              schema:
+                $ref: "#/components/schemas/PNJ"
   /pnjs/{id}:
     put:
       operationId: updatePnj
-      summary: Mettre à jour un PNJ
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/PNJ' }
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/PNJ' }
-
-  /pnjs/{id}/award-xp:
-    post:
-      operationId: awardXp
-      summary: Ajouter de l’XP
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
+      summary: Mettre à jour un PNJ (respecte les verrous s'ils existent)
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                xp: { type: integer, minimum: 1 }
-              required: [xp]
+              $ref: "#/components/schemas/PNJ"
       responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/PNJ' }
-
-  /pnjs/{id}/level-up:
-    post:
-      operationId: levelUp
-      summary: Monter de niveau si possible
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
-      responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LevelUpResult'
-
-  /pnjs/{id}/evolve:
+                $ref: "#/components/schemas/PNJ"
+  /pnjs/{id}/award-xp:
     post:
-      operationId: evolve
-      summary: Faire évoluer la race
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema: { type: string }
+      operationId: awardXp
+      summary: Ajouter de l’XP à un PNJ
       requestBody:
         required: true
         content:
@@ -111,64 +62,259 @@ paths:
             schema:
               type: object
               properties:
-                targetRaceId: { type: string }
-                justification: { type: string }
-              required: [targetRaceId]
+                xp:
+                  type: integer
+                  minimum: 1
+              required:
+                - xp
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/PNJ' }
-
+              schema:
+                $ref: "#/components/schemas/PNJ"
+  /pnjs/{id}/level-up:
+    post:
+      operationId: levelUp
+      summary: Monter de niveau autant que possible selon l’XP
+      responses:
+        "200":
+          description: Résultat de progression
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LevelUpResult"
+  /pnjs/{id}/evolve:
+    post:
+      operationId: evolve
+      summary: Faire évoluer la race d’un PNJ (vérifie conditions)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                targetRaceId:
+                  type: string
+                justification:
+                  type: string
+              required:
+                - targetRaceId
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PNJ"
+        "400":
+          description: Conditions non remplies
+  /pnjs/{id}/bind-canon:
+    post:
+      operationId: bindCanon
+      summary: Lier un PNJ à un profil canon (canonId)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                canonId:
+                  type: string
+              required:
+                - canonId
+      responses:
+        "200":
+          description: Lié
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PNJ"
+  /pnjs/{id}/lock-traits:
+    post:
+      operationId: lockTraits
+      summary: Verrouiller certains champs du PNJ (apparence, traits, skills…)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                fields:
+                  type: array
+                  items:
+                    type: string
+                  example:
+                    - appearance
+                    - personalityTraits
+                    - skills
+              required:
+                - fields
+      responses:
+        "200":
+          description: Champs verrouillés
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PNJ"
+  /pnjs/{id}/consistency:
+    get:
+      operationId: checkConsistency
+      summary: Rapport de cohérence PNJ ↔ profil canon lié
+      responses:
+        "200":
+          description: Rapport
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConsistencyReport"
   /races:
     get:
       operationId: listRaces
       summary: Liste des races
-      parameters:
-        - name: canon
-          in: query
-          schema: { type: boolean }
-        - name: family
-          in: query
-          schema: { type: string }
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/Race' }
-
-  /races/{raceId}/evolutions:
+                items:
+                  $ref: "#/components/schemas/Race"
+    post:
+      operationId: createRace
+      summary: Créer une race
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Race"
+      responses:
+        "201":
+          description: Créé
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Race"
+  /races/{raceId}:
     get:
-      operationId: getRaceEvolutions
-      summary: Chemins d’évolution d’une race
-      parameters:
-        - name: raceId
-          in: path
-          required: true
-          schema: { type: string }
+      operationId: getRace
+      summary: Obtenir une race par ID
       responses:
-        '200':
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Race"
+    put:
+      operationId: updateRace
+      summary: Mettre à jour une race
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Race"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Race"
+    delete:
+      operationId: deleteRace
+      summary: Supprimer une race
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Race"
+  /canon:
+    get:
+      operationId: listCanonProfiles
+      summary: Lister les profils canons
+      responses:
+        "200":
           description: OK
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/EvolutionPath' }
-
+                items:
+                  $ref: "#/components/schemas/CanonProfile"
+    post:
+      operationId: createCanonProfile
+      summary: Créer un profil canon
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CanonProfile"
+      responses:
+        "201":
+          description: Créé
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CanonProfile"
+  /canon/{canonId}:
+    get:
+      operationId: getCanonProfile
+      summary: Obtenir un profil canon
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CanonProfile"
+    put:
+      operationId: updateCanonProfile
+      summary: Mettre à jour un profil canon
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CanonProfile"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CanonProfile"
+    delete:
+      operationId: deleteCanonProfile
+      summary: Supprimer un profil canon
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CanonProfile"
   /story/state:
     get:
       operationId: getStoryState
       summary: Lire l’état d’histoire
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/StoryState' }
+              schema:
+                $ref: "#/components/schemas/StoryState"
     post:
       operationId: updateStoryState
       summary: Mettre à jour l’état d’histoire
@@ -176,14 +322,15 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/StoryState' }
+            schema:
+              $ref: "#/components/schemas/StoryState"
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/StoryState' }
-
+              schema:
+                $ref: "#/components/schemas/StoryState"
   /style:
     post:
       operationId: setNarrativeStyle
@@ -195,16 +342,17 @@ paths:
             schema:
               type: object
               properties:
-                styleText: { type: string }
-              required: [styleText]
+                styleText:
+                  type: string
+              required:
+                - styleText
       responses:
-        '200':
+        "200":
           description: OK
-
-  /generate/scene:
+  /settings/content:
     post:
-      operationId: generateScene
-      summary: Générer une scène
+      operationId: setContentSettings
+      summary: Régler le niveau de maturité (safe/mature/fade)
       requestBody:
         required: true
         content:
@@ -212,18 +360,49 @@ paths:
             schema:
               type: object
               properties:
-                prompt: { type: string }
-              required: [prompt]
+                explicitLevel:
+                  type: string
+                  enum:
+                    - safe
+                    - mature
+                    - fade
+              required:
+                - explicitLevel
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  narrativeText: { type: string }
-
+                  explicitLevel:
+                    type: string
+  /generate/scene:
+    post:
+      operationId: generateScene
+      summary: Générer une scène (respecte le niveau de maturité)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt:
+                  type: string
+              required:
+                - prompt
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  narrativeText:
+                    type: string
   /roll:
     post:
       operationId: rollDice
@@ -235,118 +414,266 @@ paths:
             schema:
               type: object
               properties:
-                dice: { type: string }
-              required: [dice]
+                dice:
+                  type: string
+              required:
+                - dice
       responses:
-        '200':
+        "200":
           description: OK
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RollResult'
-
+                type: object
+                properties:
+                  result:
+                    type: integer
+                  rolls:
+                    type: array
+                    items:
+                      type: integer
+                  modifier:
+                    type: integer
+                  formula:
+                    type: string
 components:
   schemas:
     PNJ:
       type: object
       properties:
-        id: { type: string }
-        name: { type: string }
-        description: { type: string }
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
         personalityTraits:
           type: array
-          items: { type: string }
-        backstory: { type: string }
-        appearance: { type: string }
-        raceId: { type: string }
-        raceName: { type: string }
-        evolutionStage: { type: string }
+          items:
+            type: string
+        backstory:
+          type: string
+        appearance:
+          type: string
+        raceId:
+          type: string
+        raceName:
+          type: string
         evolutionHistory:
           type: array
-          items: { type: string }
-        level: { type: integer, minimum: 1, default: 1 }
-        xp: { type: integer, minimum: 0, default: 0 }
-        xpToNext: { type: integer, minimum: 0 }
+          items:
+            type: string
+        level:
+          type: integer
+          minimum: 1
+          default: 1
+        xp:
+          type: integer
+          minimum: 0
+          default: 0
         stats:
           type: object
           properties:
-            hp: { type: integer }
-            mp: { type: integer }
-            strength: { type: integer }
-            defense: { type: integer }
-            magic: { type: integer }
-            speed: { type: integer }
-            resistance: { type: integer }
-            charisma: { type: integer }
+            hp:
+              type: integer
+            mp:
+              type: integer
+            strength:
+              type: integer
+            defense:
+              type: integer
+            magic:
+              type: integer
+            speed:
+              type: integer
+            resistance:
+              type: integer
+            charisma:
+              type: integer
         skills:
           type: array
           items:
             type: object
             properties:
-              name: { type: string }
-              tier: { type: string, enum: [Extra, Unique, Ultimate] }
-              effect: { type: string }
-              level: { type: integer }
-        locationId: { type: string }
-        isCanon: { type: boolean, default: false }
-
+              name:
+                type: string
+              tier:
+                type: string
+                enum:
+                  - Extra
+                  - Unique
+                  - Ultimate
+              effect:
+                type: string
+        isCanon:
+          type: boolean
+          default: false
+        canonicalSource:
+          type: string
+        canonId:
+          type: string
+        lockedTraits:
+          type: array
+          items:
+            type: string
     Race:
       type: object
       properties:
-        id: { type: string }
-        name: { type: string }
-        family: { type: string }
-        canon: { type: boolean }
-        description: { type: string }
+        id:
+          type: string
+        name:
+          type: string
+        family:
+          type: string
+        canon:
+          type: boolean
+        description:
+          type: string
         baseStats:
           type: object
           properties:
-            hp: { type: integer }
-            mp: { type: integer }
-            strength: { type: integer }
-            defense: { type: integer }
-            magic: { type: integer }
-            speed: { type: integer }
-            resistance: { type: integer }
-            charisma: { type: integer }
+            hp:
+              type: integer
+            mp:
+              type: integer
+            strength:
+              type: integer
+            defense:
+              type: integer
+            magic:
+              type: integer
+            speed:
+              type: integer
+            resistance:
+              type: integer
+            charisma:
+              type: integer
         evolutionPaths:
           type: array
-          items: { $ref: '#/components/schemas/EvolutionPath' }
-
-    EvolutionPath:
+          items:
+            type: object
+            properties:
+              toRaceId:
+                type: string
+              minLevel:
+                type: integer
+              conditions:
+                type: array
+                items:
+                  type: string
+    LevelUpResult:
       type: object
       properties:
-        toRaceId: { type: string }
-        minLevel: { type: integer }
-        conditions:
+        oldLevel:
+          type: integer
+        newLevel:
+          type: integer
+        xp:
+          type: integer
+        xpToNext:
+          type: integer
+        statIncreases:
+          type: object
+          additionalProperties:
+            type: integer
+    CanonProfile:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          description: Nom canonique
+        franchise:
+          type: string
+          example: Tensura
+        personalityTraits:
           type: array
-          items: { type: string }
-
+          items:
+            type: string
+        appearance:
+          type: string
+        skills:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              tier:
+                type: string
+                enum:
+                  - Extra
+                  - Unique
+                  - Ultimate
+              effect:
+                type: string
+        quotes:
+          type: array
+          items:
+            type: string
+        notes:
+          type: string
+        sources:
+          type: array
+          items:
+            type: string
+      required:
+        - name
+    ConsistencyReport:
+      type: object
+      properties:
+        passed:
+          type: boolean
+        conflicts:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              expected:
+                type: string
+              found:
+                type: string
+              severity:
+                type: string
+                enum:
+                  - low
+                  - medium
+                  - high
+        suggestions:
+          type: array
+          items:
+            type: string
     StoryState:
       type: object
       properties:
-        currentLocation: { type: string }
-        currentZoneId: { type: string }
+        currentLocation:
+          type: string
+        currentZoneId:
+          type: string
         charactersInScene:
           type: array
-          items: { type: string }
+          items:
+            type: string
         recentEvents:
           type: array
-          items: { type: string }
+          items:
+            type: string
         discoveredZones:
           type: array
-          items: { type: string }
+          items:
+            type: string
         worldState:
           type: object
           additionalProperties: true
 
-    RollResult:
-      type: object
-      properties:
-        result: { type: integer }
-        rolls:
-          type: array
-          items: { type: integer }
-        modifier: { type: integer }
-        formula: { type: string }
+
+
+
+
+
+
+
 
