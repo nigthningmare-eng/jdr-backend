@@ -9,7 +9,9 @@ const port = process.env.PORT || 3000;
 
 // ---- Middlewares
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));           // ⬅ augmente la limite JSON
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
 // Forcer JSON UTF-8
 app.use((req, res, next) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -635,6 +637,7 @@ app.get('/api/db/health', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://0.0.0.0:${port}`);
 });
+
 
 
 
