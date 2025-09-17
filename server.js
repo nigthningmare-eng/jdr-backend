@@ -141,12 +141,56 @@ app.delete('/api/races/:id', (req, res) => {
 });
 
 // =================== PNJ (PostgreSQL: id + data JSONB) ====================
+// Liste PNJ paginée + projection de champs + recherche simple
 app.get('/api/pnjs', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT data FROM pnjs ORDER BY (data->>\'created_at\') DESC NULLS LAST;');
-    res.json(rows.map(r => r.data));
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+    const limit  = Math.min(parseInt(req.query.limit || '50', 10), 200);  // plafond de sécurité
+    const offset = Math.max(parseInt(req.query.offset || '0', 10), 0);
+    const q = (req.query.q || '').toString().trim().toLowerCase();
+    const fields = (req.query.fields || '').toString().trim(); // ex: "id,name,level"
+
+    // total
+    const countRes = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs');
+    const total = countRes.rows[0].n;
+
+    // fetch page
+    const rowsRes = await pool.query(
+      'SELECT data FROM pnjs ORDER BY (data->>\'name\') NULLS LAST, id LIMIT $1 OFFSET $2',
+      [limit, offset]
+    );
+    let items = rowsRes.rows.map(r => r.data);
+
+    // filtre simple côté app (sur name / description)
+    if (q) {
+      items = items.filter(p =>
+        (p.name || '').toLowerCase().includes(q) ||
+        (p.description || '').toLowerCase().includes(q)
+      );
+    }
+
+    // projection de champs si demandé
+    if (fields) {
+      const pick = new Set(fields.split(',').map(s => s.trim()).filter(Boolean));
+      items = items.map(p => {
+        const out = {};
+        for (const k of pick) out[k] = p[k];
+        return out;
+      });
+    }
+
+    res.json({
+      total,
+      limit,
+      offset,
+      hasMore: offset + items.length < total,
+      items
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
+
 app.get('/api/pnjs/:id', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [req.params.id]);
@@ -637,6 +681,7 @@ app.get('/api/db/health', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://0.0.0.0:${port}`);
 });
+
 
 
 
