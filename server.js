@@ -541,10 +541,256 @@ app.get('/api/db/health', async (req, res) => {
   catch (e) { res.status(500).json({ ok: false, error: 'DB error' }); }
 });
 
+// == DB: sessions (mémoire narrative par conversation) ==
+(async () => {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id   TEXT  PRIMARY KEY,
+      data JSONB NOT NULL
+    );
+  `);
+  console.log('Table sessions OK');
+})().catch(err => console.error('DB init sessions failed:', err));
+
+// ============== ORCHESTRATEUR NARRATIF ==============
+
+// Util: empreinte simple anti-boucle
+function fingerprint(text = '') {
+  const s = String(text).toLowerCase().replace(/\s+/g,' ').slice(0, 500);
+  let h = 0; for (let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i))|0;
+  return String(h >>> 0);
+}
+
+// Util: charge/initialise une session
+async function getOrInitSession(sid) {
+  const s = String(sid || '').trim();
+  if (!s) return { id: 'default', data: { lastReplies: [], notes: [] } };
+  const r = await pool.query('SELECT data FROM sessions WHERE id=$1', [s]);
+  if (!r.rows.length) {
+    const data = { lastReplies: [], notes: [], turn: 0 };
+    await pool.query('INSERT INTO sessions (id, data) VALUES ($1, $2::jsonb)', [s, JSON.stringify(data)]);
+    return { id: s, data };
+  }
+  return { id: s, data: r.rows[0].data || { lastReplies: [], notes: [] } };
+}
+
+// Util: sauvegarde session
+async function saveSession(sid, data) {
+  await pool.query(`
+    INSERT INTO sessions (id, data) VALUES ($1,$2::jsonb)
+    ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data
+  `, [sid, JSON.stringify(data)]);
+}
+
+// Util: trouve PNJ mentionnés naïvement par nom (fallback)
+async function findMentionedPnjs(userText, limit = 6) {
+  const r = await pool.query('SELECT data FROM pnjs');
+  const all = r.rows.map(x => x.data);
+  const txt = String(userText || '').toLowerCase();
+  const hits = [];
+  for (const p of all) {
+    const nm = String(p.name || '').toLowerCase();
+    if (!nm) continue;
+    if (txt.includes(nm)) hits.push(p);
+    if (hits.length >= limit) break;
+  }
+  return hits;
+}
+
+// Util: si l’utilisateur fournit explicitement des ids
+async function loadPnjsByIds(ids = []) {
+  const out = [];
+  for (const id of ids) {
+    const r = await pool.query('SELECT data FROM pnjs WHERE id=$1', [String(id)]);
+    if (r.rows.length) out.push(r.rows[0].data);
+  }
+  return out;
+}
+
+// Construit une “fiche PNJ compacte” pour le prompt
+function compactCard(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    appearance: p.appearance,
+    personalityTraits: p.personalityTraits,
+    backstoryHint: (p.backstory || '').split('\n').slice(-2).join(' ').slice(0, 300),
+    skills: Array.isArray(p.skills) ? p.skills.map(s => s.name).slice(0, 8) : [],
+    locationId: p.locationId,
+    canonId: p.canonId,
+    lockedTraits: p.lockedTraits
+  };
+}
+
+// -------- CONTEXT: prépare le tour de jeu --------
+/*
+Body:
+{
+  "sid": "session-123",
+  "userText": "Kael parle à Araniel...",
+  "pnjIds": ["1758006092821"],          // (optionnel)
+  "pnjNames": ["Kael","Araniel"],       // (optionnel, plus intuitif)
+  "locationId": "delonix"               // (optionnel)
+}
+*/
+app.post('/api/engine/context', async (req, res) => {
+  try {
+    const { sid, userText, pnjIds, pnjNames } = req.body || {};
+    const sess = await getOrInitSession(sid || 'default');
+
+    // Anti-boucle: last 3 hashes
+    const lastHashes = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies.slice(-3) : [];
+    const token = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+
+    let pnjs = [];
+
+    // 1) Si pnjIds fournis → priorité
+    if (Array.isArray(pnjIds) && pnjIds.length) {
+      pnjs = await loadPnjsByIds(pnjIds);
+    }
+    // 2) Sinon si pnjNames fournis → chercher par nom exact (insensible à la casse)
+    else if (Array.isArray(pnjNames) && pnjNames.length) {
+      const r = await pool.query('SELECT data FROM pnjs');
+      const all = r.rows.map(x => x.data);
+      const lowerNames = pnjNames.map(n => String(n).toLowerCase());
+      pnjs = all.filter(p => lowerNames.includes(String(p.name || '').toLowerCase()));
+    }
+    // 3) Sinon → détection naïve dans userText
+    else {
+      pnjs = await findMentionedPnjs(userText, 8);
+    }
+
+    // Fiches compactes
+    const pnjCards = pnjs.map(compactCard);
+
+    // Garde-fous
+    const rules = [
+      "Toujours rester fidèle aux traits et aux champs verrouillés (lockedTraits).",
+      "Ne contredis jamais un souvenir récent; en cas de doute, demande une micro-clarification.",
+      "Évite les répétitions: ne réutilise pas mot pour mot les 2 dernières répliques modèles.",
+      "Concis mais immersif; dialogues en **gras**; émotions en *italique*; noms en **gras** avec emoji si prévu."
+    ].join(' ');
+
+    const style = "Light novel isekai (Tensura-compat), sobre, immersif, sans détails graphiques. Dialogues alternés naturels.";
+
+    const systemHint =
+`[ENGINE CONTEXT]
+Session: ${sid || 'default'}
+Tour: ${Number(sess.data.turn || 0) + 1}
+AntiLoopToken: ${token}
+Do/Don't: ${rules}
+
+PNJ cards:
+${pnjCards.map(c => `- ${c.name}#${c.id}
+  traits: ${JSON.stringify(c.personalityTraits || [])}
+  locked: ${JSON.stringify(c.lockedTraits || [])}
+  backstoryHint: ${c.backstoryHint || '(n/a)'}
+  skills: ${JSON.stringify(c.skills || [])}
+  location: ${c.locationId || '(n/a)'}
+`).join('\n')}
+
+Format de sortie exigé:
+# [Lieu] — [Date/Heure]
+
+**🙂 NomPNJ** *(émotion)*  
+**Réplique en gras...**
+
+_Notes MJ (courtes)_: [événements | verrous | xp]`;
+
+    res.json({
+      guard: { antiLoop: { token, lastHashes }, rules, style },
+      pnjCards,
+      systemHint,
+      turn: Number(sess.data.turn || 0) + 1
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'engine/context error' });
+  }
+});
+
+
+
+
+// -------- COMMIT: enregistre ce qui s'est passé --------
+/*
+Body:
+{
+  "sid": "session-123",
+  "modelReply": "…texte produit par GPT…",
+  "notes": "mini résumé 1-2 lignes (facultatif)",
+  "pnjUpdates": [
+    { "id": "1758006092821", "patch": { "locationId": "delonix-souterrains" } },
+    { "id": "1758001438608", "patch": { "xp": 1600 } }
+  ],
+  "lock": { "id": "1758006092821", "fields": ["personalityTraits","skills"] }   // (facultatif)
+}
+*/
+app.post('/api/engine/commit', async (req, res) => {
+  try {
+    const { sid, modelReply, notes, pnjUpdates, lock } = req.body || {};
+    const sess = await getOrInitSession(sid || 'default');
+
+    // Anti-boucle: stocke l’empreinte de la dernière sortie
+    const fp = fingerprint(modelReply || '');
+    sess.data.lastReplies = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies : [];
+    sess.data.lastReplies.push(fp);
+    // limite mémoire courte
+    if (sess.data.lastReplies.length > 10) sess.data.lastReplies = sess.data.lastReplies.slice(-10);
+
+    // Notes courtes de session
+    if (notes) {
+      sess.data.notes = Array.isArray(sess.data.notes) ? sess.data.notes : [];
+      sess.data.notes.push(String(notes).slice(0, 300));
+      if (sess.data.notes.length > 50) sess.data.notes = sess.data.notes.slice(-50);
+    }
+
+    // Tour +1
+    sess.data.turn = Number(sess.data.turn || 0) + 1;
+
+    // Appliquer les mises à jour PNJ (merge simple)
+    if (Array.isArray(pnjUpdates)) {
+      for (const u of pnjUpdates) {
+        const id = String(u?.id || '');
+        const patch = u?.patch || {};
+        if (!id || typeof patch !== 'object') continue;
+
+        const cur = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
+        if (!cur.rows.length) continue;
+        const current = cur.rows[0].data;
+        const locks = new Set(current.lockedTraits || []);
+        const incoming = { ...patch };
+        for (const f of locks) if (f in incoming && JSON.stringify(incoming[f]) !== JSON.stringify(current[f])) delete incoming[f];
+        const merged = { ...current, ...incoming, id };
+        await pool.query('UPDATE pnjs SET data=$2::jsonb WHERE id=$1', [id, JSON.stringify(merged)]);
+      }
+    }
+
+    // Verrouillage optionnel
+    if (lock && lock.id && Array.isArray(lock.fields) && lock.fields.length) {
+      const id = String(lock.id);
+      const cur = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
+      if (cur.rows.length) {
+        const p = cur.rows[0].data;
+        const set = new Set(p.lockedTraits || []);
+        for (const f of lock.fields) set.add(String(f));
+        p.lockedTraits = Array.from(set);
+        await pool.query('UPDATE pnjs SET data=$2::jsonb WHERE id=$1', [id, JSON.stringify(p)]);
+      }
+    }
+
+    await saveSession(sid || 'default', sess.data);
+
+    res.json({ ok: true, turn: sess.data.turn, lastHash: fp });
+  } catch (e) { console.error(e); res.status(500).json({ message: 'engine/commit error' }); }
+});
+
+
 // ---------------- Lancement ----------------
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
