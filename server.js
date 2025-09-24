@@ -145,7 +145,8 @@ app.get('/api/pnjs', async (req, res) => {
     res.status(500).json({ message: 'DB error' });
   }
 });
-// Hydratation multiple par ids
+
+// NEW: Hydratation multiple par ids
 app.get('/api/pnjs/by-ids', async (req, res) => {
   try {
     const ids = String(req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -153,6 +154,16 @@ app.get('/api/pnjs/by-ids', async (req, res) => {
     const r = await pool.query('SELECT data FROM pnjs WHERE id = ANY($1::text[])', [ids]);
     const map = new Map(r.rows.map(x => [x.data.id, x.data]));
     res.json(ids.map(id => map.get(id)).filter(Boolean));
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+// NEW: Compact cards pour prompts
+app.get('/api/pnjs/compact', async (req, res) => {
+  try {
+    const ids = String(req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!ids.length) return res.status(400).json({ message: 'ids requis' });
+    const r = await pool.query('SELECT data FROM pnjs WHERE id = ANY($1::text[])', [ids]);
+    res.json(r.rows.map(x => compactCard(x.data)));
   } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
 });
 
@@ -720,8 +731,6 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
 });
 
 
-
-
 // -------- COMMIT: enregistre ce qui s'est passé --------
 /*
 Body:
@@ -800,6 +809,8 @@ app.post('/api/engine/commit', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
+
 
 
 
