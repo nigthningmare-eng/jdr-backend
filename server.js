@@ -706,28 +706,119 @@ app.post('/api/engine/commit', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ message: 'engine/commit error' }); }
 });
 
-// 🔎 Résolution de nom → {id,name} (léger, utile côté UI/Actions)
+// 🔎 Résolution de nom TOLÉRANTE + SCORING (prénom suffit)
 app.get('/api/pnjs/resolve', async (req, res) => {
   res.set('Content-Type', 'application/json; charset=utf-8');
-  const name = (req.query.name || '').toString().trim();
-  if (!name) return res.status(200).json({ matches: [], exact: false });
+  const raw = (req.query.name || '').toString().trim();
+  if (!raw) return res.status(200).json({ matches: [], exact: false });
+
+  // Normalisation JS (accents/ponctuation → espace)
+  const norm = raw
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Helpers scoring
+  const toKey = s => String(s || '')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
+    .replace(/\s+/g,' ')
+    .trim()
+    .toLowerCase();
+
   try {
-    const { rows } = await pool.query(`
-      SELECT (data->>'id') AS id, (data->>'name') AS name
-      FROM pnjs
-      WHERE lower(data->>'name') LIKE lower($1)
-      ORDER BY data->>'name'
-      LIMIT 10`,
-      [`%${name}%`]
-    );
-    const matches = rows.map(r => ({ id: String(r.id), name: String(r.name || '') }));
-    const exact = matches.some(m => m.name.toLowerCase().trim() === name.toLowerCase().trim());
+    let rows = [];
+
+    // 1) Exact match (orthographe telle quelle)
+    try {
+      rows = (await pool.query(
+        `SELECT data FROM pnjs
+         WHERE trim(lower(data->>'name')) = trim(lower($1))
+         LIMIT 1`,
+        [raw]
+      )).rows;
+    } catch {}
+
+    // 2) Préfixe sur version normalisée : "rossweisse%"  → capte "Rossweisse K. Melkvi"
+    if (!rows.length) {
+      try {
+        rows = (await pool.query(
+          `SELECT data FROM pnjs
+           WHERE lower(data->>'name') LIKE lower($1)
+           ORDER BY data->>'name'
+           LIMIT 30`,
+          [norm + '%']
+        )).rows;
+      } catch {}
+    }
+
+    // 3) Tous les mots doivent apparaître (AND)
+    if (!rows.length) {
+      const tokens = norm.toLowerCase().split(/\s+/).filter(Boolean);
+      if (tokens.length) {
+        const wheres = tokens.map((_, i) => `lower(data->>'name') LIKE $${i+1}`);
+        const params = tokens.map(t => `%${t}%`);
+        try {
+          rows = (await pool.query(
+            `SELECT data FROM pnjs
+             WHERE ${wheres.join(' AND ')}
+             ORDER BY data->>'name'
+             LIMIT 50`,
+            params
+          )).rows;
+        } catch {}
+      }
+    }
+
+    // 4) Fallback : simple inclusion large
+    if (!rows.length) {
+      try {
+        rows = (await pool.query(
+          `SELECT data FROM pnjs
+           WHERE lower(data->>'name') LIKE lower($1)
+           ORDER BY data->>'name'
+           LIMIT 50`,
+          [`%${norm}%`]
+        )).rows;
+      } catch {}
+    }
+
+    // --- SCORING : pour mettre le "meilleur" en premier ---
+    const qKey = toKey(norm);
+    const qTokens = qKey.split(/\s+/).filter(Boolean);
+    const score = (name) => {
+      const k = toKey(name);
+      const tokens = k.split(/\s+/).filter(Boolean);
+      const starts = k.startsWith(qKey) ? 50 : 0;             // meilleur si le nom commence par le prénom demandé
+      const exact  = (k === qKey) ? 100 : 0;                  // exact au top
+      const allAnd = qTokens.every(t => k.includes(t)) ? 20 : 0;
+      const firstMatch = (tokens[0] === qTokens[0]) ? 15 : 0; // prénom identique = boost
+      const lenPenalty = Math.min(10, Math.abs(k.length - qKey.length)); // éviter fausses proximités très longues/courtes
+      return exact + starts + firstMatch + allAnd - lenPenalty;
+    };
+
+    const dedup = new Map(); // éviter doublons par id
+    for (const r of rows) {
+      if (!r?.data?.id) continue;
+      if (!dedup.has(r.data.id)) dedup.set(r.data.id, r.data);
+    }
+    const candidates = Array.from(dedup.values());
+    candidates.sort((a, b) => score(b.name) - score(a.name));
+
+    const matches = candidates.map(p => ({ id: String(p.id), name: String(p.name || '') })).slice(0, 10);
+    const exact = matches.some(m => toKey(m.name) === qKey);
     return res.status(200).json({ matches, exact });
-  } catch (e) { console.error('GET /api/pnjs/resolve error:', e); return res.status(200).json({ matches: [], exact: false }); }
+  } catch (e) {
+    console.error('GET /api/pnjs/resolve error:', e);
+    return res.status(200).json({ matches: [], exact: false });
+  }
 });
+
 
 // ---------------- Lancement ----------------
 app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
+
 
 
 
