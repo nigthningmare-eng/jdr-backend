@@ -173,7 +173,6 @@ app.get('/api/pnjs/count', async (req, res) => {
   try { const r = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs'); res.json({ total: r.rows[0].n }); }
   catch (e) { res.status(500).json({ message: 'DB error' }); }
 });
-curl.exe --ssl-no-revoke "https://jdr-backend.onrender.com/api/pnjs/by-ids?ids=<ID_RENVOYÉ>"
 
 // 🔎 Résolution de nom TOLÉRANTE + SCORING (prénom suffit)
 app.get('/api/pnjs/resolve', async (req, res) => {
@@ -819,6 +818,7 @@ app.post('/api/engine/commit', async (req, res) => {
 
 // ---------------- Lancement ----------------
 app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
+
 
 
 
