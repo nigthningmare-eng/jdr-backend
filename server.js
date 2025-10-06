@@ -512,6 +512,7 @@ app.post('/api/engine/context', async (req, res) => {
   try {
     const body = req.body || {};
     sid = body.sid || 'default';
+    const userText = String(body.userText || '');
     const pnjIds = Array.isArray(body.pnjIds) ? body.pnjIds : [];
     const pnjNames = Array.isArray(body.pnjNames) ? body.pnjNames : (body.name ? [String(body.name)] : []);
 
@@ -522,22 +523,24 @@ app.post('/api/engine/context', async (req, res) => {
 
     let pnjs = [];
     if (pnjIds.length) {
+      // 1) Priorité aux ids explicites
       pnjs = await loadPnjsByIds(pnjIds);
     } else if (pnjNames.length) {
+      // 2) Résolution PAR NOM (robuste)
       const raw = String(pnjNames[0] || '').trim();
       if (raw) {
         let rows = [];
-        // 1) Exact (trim+lower)
+        // 2.1 Exact (trim+lower)
         try {
           rows = (await pool.query(`SELECT data FROM pnjs WHERE trim(lower(data->>'name')) = trim(lower($1)) LIMIT 1`, [raw])).rows;
         } catch {}
-        // 2) Préfixe ("Milim%")
+        // 2.2 Préfixe ("Milim%")
         if (!rows.length) {
           try {
             rows = (await pool.query(`SELECT data FROM pnjs WHERE lower(data->>'name') LIKE lower($1) ORDER BY data->>'name' LIMIT 5`, [raw.replace(/\s+/g,' ').trim() + '%'])).rows;
           } catch {}
         }
-        // 3) Tous mots contenus ("%milim%" AND "%nava%")
+        // 2.3 Tous mots contenus ("%milim%" AND "%nava%")
         if (!rows.length) {
           const tokens = raw.toLowerCase().split(/\s+/).filter(Boolean);
           if (tokens.length) {
@@ -548,7 +551,7 @@ app.post('/api/engine/context', async (req, res) => {
             } catch {}
           }
         }
-        // 4) Fallback LIKE large → hydrate par id
+        // 2.4 Fallback LIKE large → hydrate par id
         if (!rows.length) {
           try {
             const likeRow = (await pool.query(`SELECT (data->>'id') AS id FROM pnjs WHERE lower(data->>'name') LIKE lower($1) ORDER BY data->>'name' LIMIT 1`, [`%${raw}%`])).rows[0];
@@ -559,17 +562,59 @@ app.post('/api/engine/context', async (req, res) => {
         }
       }
     } else {
-      pnjs = [];
+      // 3) Détection automatique depuis userText (sans pnjIds / pnjNames)
+      const txt = userText.toLowerCase();
+      // on extrait des tokens (>=3 chars), unicise, limite 5 pour éviter les requêtes trop lourdes
+      const tokens = Array.from(new Set(
+        txt.split(/[^a-zàâçéèêëîïôùûüÿñœ'-]+/i)
+          .map(t => t.trim()).filter(t => t.length >= 3)
+      )).slice(0, 5);
+
+      let rows = [];
+      if (tokens.length) {
+        // AND sur tous les tokens
+        const wheres = tokens.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
+        const params = tokens.map(t => `%${t}%`);
+        try {
+          rows = (
+            await pool.query(
+              `SELECT data FROM pnjs WHERE ${wheres.join(' AND ')} ORDER BY data->>'name' LIMIT 6`,
+              params
+            )
+          ).rows;
+        } catch {}
+      }
+
+      // fallback : 2 tokens les plus longs
+      if (!rows.length && tokens.length) {
+        const top2 = [...tokens].sort((a,b)=>b.length-a.length).slice(0,2);
+        const wheres = top2.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
+        const params = top2.map(t => `%${t}%`);
+        try {
+          rows = (
+            await pool.query(
+              `SELECT data FROM pnjs WHERE ${wheres.join(' AND ')} ORDER BY data->>'name' LIMIT 6`,
+              params
+            )
+          ).rows;
+        } catch {}
+      }
+
+      pnjs = rows.map(r => r.data);
     }
 
+    // Fiches compactes & ancres
     const pnjCards = pnjs.slice(0, 8).map(compactCard);
+
     sess.data.dossiersById = sess.data.dossiersById || {};
     for (const p of pnjs.slice(0, 8)) {
       sess.data.dossiersById[p.id] = continuityDossier(p);
     }
     await saveSession(sid, sess.data);
+
     const dossiers = pnjs.map(p => sess.data.dossiersById[p.id]).filter(Boolean);
 
+    // Règles + style persisté + garde-fous contenu
     const rules = [
       'Toujours respecter lockedTraits.',
       "Ne jamais changer l'identité d'un PNJ (Nom, race, relations clés).",
@@ -705,6 +750,7 @@ app.get('/api/pnjs/resolve', async (req, res) => {
 
 // ---------------- Lancement ----------------
 app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
+
 
 
 
