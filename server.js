@@ -424,25 +424,7 @@ app.post('/api/races', (req, res) => {
 });
 app.delete('/api/races/:id', (req, res) => { const i = races.findIndex(r => r.id === req.params.id); if (i === -1) return res.status(404).json({ message: 'Race non trouvée' }); const removed = races.splice(i, 1)[0]; saveRaces(); res.json(removed); });
 
-// =================== CANON PROFILES (PostgreSQL) ====================
-app.get('/api/canon', async (req, res) => { try { const { rows } = await pool.query('SELECT data FROM canon_profiles'); res.json(rows.map(r => r.data)); } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); } });
-app.post('/api/canon', async (req, res) => { try { const c = req.body || {}; if (!c.name) return res.status(400).json({ message: 'name requis' }); c.id = c.id || slugifyId(c.name); await pool.query('INSERT INTO canon_profiles (id, data) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data', [c.id, JSON.stringify(c)]); res.status(201).json(c); } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); } });
-app.get('/api/canon/:canonId', async (req, res) => { try { const id = req.params.canonId; const { rows } = await pool.query('SELECT data FROM canon_profiles WHERE id = $1', [id]); if (!rows.length) return res.status(404).json({ message: 'Canon non trouvé' }); res.json(rows[0].data); } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); } });
-app.put('/api/canon/:canonId', async (req, res) => { try { const id = req.params.canonId; const { rows } = await pool.query('SELECT data FROM canon_profiles WHERE id = $1', [id]); if (!rows.length) return res.status(404).json({ message: 'Canon non trouvé' }); const merged = { ...rows[0].data, ...req.body, id }; await pool.query('UPDATE canon_profiles SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]); res.json(merged); } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); } });
-app.delete('/api/canon/:canonId', async (req, res) => { try { const id = req.params.canonId; const { rows } = await pool.query('DELETE FROM canon_profiles WHERE id = $1 RETURNING data', [id]); if (!rows.length) return res.status(404).json({ message: 'Canon non trouvé' }); res.json(rows[0].data); } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); } });
-
-// =================== STORY / STYLE / CONTENT / SCENE ====================
-app.get('/api/story/state', (req, res) => res.json(storyState));
-app.post('/api/story/state', (req, res) => { storyState = req.body || {}; res.json(storyState); });
-app.post('/api/style', (req, res) => { narrativeStyle = req.body || { styleText: '' }; res.json({ message: 'Style mis à jour.' }); });
-app.post('/api/settings/content', (req, res) => { const allowed = ['safe','mature','fade']; const lvl = (req.body?.explicitLevel || '').toLowerCase(); contentSettings.explicitLevel = allowed.includes(lvl) ? lvl : contentSettings.explicitLevel; res.json({ explicitLevel: contentSettings.explicitLevel }); });
-app.post('/api/generate/scene', (req, res) => { const { prompt } = req.body || {}; const base = `🎭 STYLE: ${String(narrativeStyle.styleText || '').slice(0, 60)}...\n\n${prompt || '(vide)'}`; const safe = softenStyle(base, contentSettings.explicitLevel); res.json({ narrativeText: safe }); });
-
-// =================== ROLL (dés) ====================
-app.post('/api/roll', (req, res) => { const { dice } = req.body || {}; const p = parseDiceFormula(dice); if (!p) return res.status(400).json({ message: 'Formule invalide. Utilise NdM±K (ex: 1d20+3).' }); const rolls = Array.from({ length: p.count }, () => rollOnce(p.sides)); const total = rolls.reduce((a, b) => a + b, 0) + p.modifier; res.json({ result: total, rolls, modifier: p.modifier, formula: dice }); });
-
-// =================== HEALTH ====================
-app.get('/api/db/health', async (req, res) => { try { await pool.query('SELECT 1'); res.json({ ok: true }); } catch (e) { res.status(500).json({ ok: false, error: 'DB error' }); } });
+// =================== SESSIONS & CONTEXTE ====================
 
 // == Sessions helpers ==
 function fingerprint(text = '') { const s = String(text).toLowerCase().replace(/\s+/g,' ').slice(0, 500); let h = 0; for (let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i))|0; return String(h >>> 0); }
@@ -562,12 +544,13 @@ app.post('/api/engine/context', async (req, res) => {
         }
       }
     } else {
-      // 3) Détection automatique depuis userText (sans pnjIds / pnjNames)
+      // 3) Détection automatique depuis userText (quand ni pnjIds ni pnjNames)
       const txt = userText.toLowerCase();
-      // on extrait des tokens (>=3 chars), unicise, limite 5 pour éviter les requêtes trop lourdes
+      // tokens >=3 caractères, uniques, limiter à 5 pour rester léger
       const tokens = Array.from(new Set(
         txt.split(/[^a-zàâçéèêëîïôùûüÿñœ'-]+/i)
-          .map(t => t.trim()).filter(t => t.length >= 3)
+           .map(t => t.trim())
+           .filter(t => t.length >= 3)
       )).slice(0, 5);
 
       let rows = [];
@@ -584,8 +567,7 @@ app.post('/api/engine/context', async (req, res) => {
           ).rows;
         } catch {}
       }
-
-      // fallback : 2 tokens les plus longs
+      // Fallback : 2 tokens les plus longs si rien trouvé
       if (!rows.length && tokens.length) {
         const top2 = [...tokens].sort((a,b)=>b.length-a.length).slice(0,2);
         const wheres = top2.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
@@ -599,22 +581,18 @@ app.post('/api/engine/context', async (req, res) => {
           ).rows;
         } catch {}
       }
-
       pnjs = rows.map(r => r.data);
     }
 
     // Fiches compactes & ancres
     const pnjCards = pnjs.slice(0, 8).map(compactCard);
-
     sess.data.dossiersById = sess.data.dossiersById || {};
     for (const p of pnjs.slice(0, 8)) {
       sess.data.dossiersById[p.id] = continuityDossier(p);
     }
     await saveSession(sid, sess.data);
-
     const dossiers = pnjs.map(p => sess.data.dossiersById[p.id]).filter(Boolean);
 
-    // Règles + style persisté + garde-fous contenu
     const rules = [
       'Toujours respecter lockedTraits.',
       "Ne jamais changer l'identité d'un PNJ (Nom, race, relations clés).",
@@ -658,7 +636,7 @@ Si plusieurs PNJ correspondent, utilise le premier de la liste (ou demande une m
 Format:
 # [Lieu] — [Date/Heure]
 
-**🙂 NomPNJ** *(émotion)*  
+**🙂 NomPNJ** *(émotion)*
 **Réplique en gras...**
 
 _Notes MJ (courtes)_: [événements | verrous | xp]`;
@@ -750,6 +728,8 @@ app.get('/api/pnjs/resolve', async (req, res) => {
 
 // ---------------- Lancement ----------------
 app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
+
+
 
 
 
