@@ -3,6 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const { Pool } = require('pg');
+const https = require('https');
+const http = require('http');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -48,20 +50,32 @@ const pool = new Pool({
 })();
 
 // ---------- Mémoire légère (fichiers locaux) ----------
-let storyState = safeRequire('./storyState.json', {});
-let narrativeStyle = { styleText: '' }; // persiste en mémoire process; set via /api/style
-let contentSettings = { explicitLevel: 'mature' }; // 'safe' | 'mature' | 'fade'
-
 const racesPath = './races.json';
-let races = safeRequire('./races.json', []);
-function saveRaces() {
-  try { fs.writeFileSync(racesPath, JSON.stringify(races, null, 2), 'utf-8'); }
-  catch (e) { console.error("Erreur d'écriture races.json:", e); }
-}
+const stylePath = './style.json';
+
 function safeRequire(path, fallback) {
   try { if (fs.existsSync(path)) return require(path); } catch {}
   return fallback;
 }
+function saveFile(path, obj) {
+  try { fs.writeFileSync(path, JSON.stringify(obj, null, 2), 'utf-8'); }
+  catch (e) { console.error('Erreur écriture', path, e); }
+}
+function loadStyle() {
+  try {
+    if (fs.existsSync(stylePath)) return JSON.parse(fs.readFileSync(stylePath, 'utf-8'));
+  } catch (e) { console.error('Erreur lecture style.json:', e); }
+  return { styleText: '' };
+}
+
+let storyState = safeRequire('./storyState.json', {});
+let races = safeRequire('./races.json', []);
+let narrativeStyle = loadStyle();                 // <-- persistant
+let contentSettings = { explicitLevel: 'mature' };// 'safe' | 'mature' | 'fade'
+
+function saveRaces() { saveFile(racesPath, races); }
+function saveStyle(styleObj) { saveFile(stylePath, styleObj || { styleText: '' }); }
+
 function slugifyId(str) {
   return String(str || '')
     .toLowerCase()
@@ -102,8 +116,115 @@ function softenStyle(text, level = 'mature') {
     .concat('\n\n(La scène reste suggestive, sans détails graphiques.)');
 }
 
+// --- petits helpers fetch (sans dépendances externes) ---
+function fetchText(url, opts={}) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? https : http;
+    const req = lib.get(url, opts, (resp) => {
+      if (resp.statusCode >= 300 && resp.statusCode < 400 && resp.headers.location) {
+        return resolve(fetchText(resp.headers.location, opts));
+      }
+      let data = '';
+      resp.on('data', chunk => data += chunk);
+      resp.on('end', () => resolve(data));
+    });
+    req.on('error', reject);
+  });
+}
+async function fetchJson(url, opts={}) {
+  const txt = await fetchText(url, opts);
+  try { return JSON.parse(txt); } catch { return {}; }
+}
+
+// =================== HEALTH ====================
+app.get('/api/db/health', async (req, res) => {
+  try { await pool.query('SELECT 1'); res.json({ ok: true }); }
+  catch (e) { res.status(500).json({ ok: false, error: 'DB error' }); }
+});
+
+// =================== STYLE ====================
+app.get('/api/style', (req, res) => {
+  res.json(narrativeStyle || { styleText: '' });
+});
+app.post('/api/style', (req, res) => {
+  const incoming = req.body || {};
+  const text = typeof incoming.styleText === 'string' ? incoming.styleText : '';
+  narrativeStyle = { styleText: text };
+  saveStyle(narrativeStyle);
+  res.json({ message: 'Style mis à jour et sauvegardé.', style: narrativeStyle });
+});
+
+// =================== CONTENT SETTINGS ====================
+app.post('/api/settings/content', (req, res) => {
+  const allowed = ['safe','mature','fade'];
+  const lvl = (req.body?.explicitLevel || '').toLowerCase();
+  contentSettings.explicitLevel = allowed.includes(lvl) ? lvl : contentSettings.explicitLevel;
+  res.json({ explicitLevel: contentSettings.explicitLevel });
+});
+
+// =================== WEB SEARCH / FETCH ====================
+app.get('/api/web/search', async (req, res) => {
+  try {
+    const q = (req.query.q || '').toString().trim();
+    const limit = Math.min(parseInt(req.query.limit || '5', 10), 10);
+    if (!q) return res.status(400).json({ message: 'q requis' });
+
+    const serpKey = process.env.SERPAPI_KEY || '';
+    const braveKey = process.env.BRAVE_API_KEY || '';
+
+    if (serpKey) {
+      const u = new URL('https://serpapi.com/search.json');
+      u.searchParams.set('engine', 'google');
+      u.searchParams.set('q', q);
+      u.searchParams.set('num', String(limit));
+      u.searchParams.set('api_key', serpKey);
+      const r = await fetchJson(u.toString());
+      const items = Array.isArray(r.organic_results) ? r.organic_results.slice(0, limit).map(x => ({
+        title: x.title, url: x.link, snippet: x.snippet
+      })) : [];
+      return res.json({ provider: 'serpapi', q, items });
+    } else if (braveKey) {
+      const u = new URL('https://api.search.brave.com/res/v1/web/search');
+      u.searchParams.set('q', q);
+      u.searchParams.set('count', String(limit));
+      const r = await fetchJson(u.toString(), { headers: { 'X-Subscription-Token': braveKey } });
+      const items = Array.isArray(r.web?.results) ? r.web.results.slice(0, limit).map(x => ({
+        title: x.title, url: x.url, snippet: x.description
+      })) : [];
+      return res.json({ provider: 'brave', q, items });
+    }
+    return res.status(501).json({ message: 'Aucune clé de recherche configurée. Définis SERPAPI_KEY ou BRAVE_API_KEY.' });
+  } catch (e) {
+    console.error('/api/web/search error:', e);
+    res.status(500).json({ message: 'web search error' });
+  }
+});
+
+app.get('/api/web/fetch', async (req, res) => {
+  try {
+    const raw = (req.query.url || '').toString();
+    if (!raw) return res.status(400).json({ message: 'url requise' });
+    let url; try { url = new URL(raw); } catch { return res.status(400).json({ message: 'url invalide' }); }
+
+    const html = await fetchText(url.toString());
+    const title = (html.match(/<title[^>]*>([^<]+)/i) || [,''])[1].trim();
+    const metaDesc = (html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)/i) || [,''])[1].trim();
+    const text = html
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 5000);
+    res.json({ title, metaDesc, text });
+  } catch (e) {
+    console.error('/api/web/fetch error:', e);
+    res.status(500).json({ message: 'web fetch error' });
+  }
+});
+
 // =================== PNJ (PostgreSQL) ====================
-// LISTE paginée + projection + filtre SQL; TOUJOURS 200 (évite les connector errors)
+// LISTE paginée + projection + filtre SQL; TOUJOURS 200
 app.get('/api/pnjs', async (req, res) => {
   res.set('Content-Type', 'application/json; charset=utf-8');
   const limit  = Math.min(parseInt(req.query.limit || '50', 10), 200);
@@ -159,6 +280,19 @@ app.get('/api/pnjs/by-ids', async (req, res) => {
 });
 
 // Compact cards pour prompts
+function compactCard(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    appearance: p.appearance,
+    personalityTraits: p.personalityTraits,
+    backstoryHint: (p.backstory || '').split('\n').slice(-2).join(' ').slice(0, 300),
+    skills: Array.isArray(p.skills) ? p.skills.map(s => s.name).slice(0, 8) : [],
+    locationId: p.locationId,
+    canonId: p.canonId,
+    lockedTraits: p.lockedTraits
+  };
+}
 app.get('/api/pnjs/compact', async (req, res) => {
   try {
     const ids = String(req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -180,14 +314,12 @@ app.get('/api/pnjs/resolve', async (req, res) => {
   const raw = (req.query.name || '').toString().trim();
   if (!raw) return res.status(200).json({ matches: [], exact: false });
 
-  // Normalisation JS (accents/ponctuation → espace)
   const norm = raw
     .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
     .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Helpers scoring
   const toKey = s => String(s || '')
     .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
     .replace(/[^\p{L}\p{N}\s'-]/gu, ' ')
@@ -197,31 +329,23 @@ app.get('/api/pnjs/resolve', async (req, res) => {
 
   try {
     let rows = [];
-
-    // 1) Exact match (orthographe telle quelle)
     try {
       rows = (await pool.query(
         `SELECT data FROM pnjs
          WHERE trim(lower(data->>'name')) = trim(lower($1))
-         LIMIT 1`,
-        [raw]
+         LIMIT 1`, [raw]
       )).rows;
     } catch {}
-
-    // 2) Préfixe sur version normalisée : "rossweisse%"  → capte "Rossweisse K. Melkvi"
     if (!rows.length) {
       try {
         rows = (await pool.query(
           `SELECT data FROM pnjs
            WHERE lower(data->>'name') LIKE lower($1)
            ORDER BY data->>'name'
-           LIMIT 30`,
-          [norm + '%']
+           LIMIT 30`, [norm + '%']
         )).rows;
       } catch {}
     }
-
-    // 3) Tous les mots doivent apparaître (AND)
     if (!rows.length) {
       const tokens = norm.toLowerCase().split(/\s+/).filter(Boolean);
       if (tokens.length) {
@@ -232,41 +356,36 @@ app.get('/api/pnjs/resolve', async (req, res) => {
             `SELECT data FROM pnjs
              WHERE ${wheres.join(' AND ')}
              ORDER BY data->>'name'
-             LIMIT 50`,
-            params
+             LIMIT 50`, params
           )).rows;
         } catch {}
       }
     }
-
-    // 4) Fallback : simple inclusion large
     if (!rows.length) {
       try {
         rows = (await pool.query(
           `SELECT data FROM pnjs
            WHERE lower(data->>'name') LIKE lower($1)
            ORDER BY data->>'name'
-           LIMIT 50`,
-          [`%${norm}%`]
+           LIMIT 50`, [`%${norm}%`]
         )).rows;
       } catch {}
     }
 
-    // --- SCORING : pour mettre le "meilleur" en premier ---
     const qKey = toKey(norm);
     const qTokens = qKey.split(/\s+/).filter(Boolean);
     const score = (name) => {
       const k = toKey(name);
       const tokens = k.split(/\s+/).filter(Boolean);
-      const starts = k.startsWith(qKey) ? 50 : 0;             // meilleur si le nom commence par le prénom demandé
-      const exact  = (k === qKey) ? 100 : 0;                  // exact au top
+      const starts = k.startsWith(qKey) ? 50 : 0;
+      const exact  = (k === qKey) ? 100 : 0;
       const allAnd = qTokens.every(t => k.includes(t)) ? 20 : 0;
-      const firstMatch = (tokens[0] === qTokens[0]) ? 15 : 0; // prénom identique = boost
-      const lenPenalty = Math.min(10, Math.abs(k.length - qKey.length)); // éviter fausses proximités très longues/courtes
+      const firstMatch = (tokens[0] === qTokens[0]) ? 15 : 0;
+      const lenPenalty = Math.min(10, Math.abs(k.length - qKey.length));
       return exact + starts + firstMatch + allAnd - lenPenalty;
     };
 
-    const dedup = new Map(); // éviter doublons par id
+    const dedup = new Map();
     for (const r of rows) {
       if (!r?.data?.id) continue;
       if (!dedup.has(r.data.id)) dedup.set(r.data.id, r.data);
@@ -301,7 +420,10 @@ app.post('/api/pnjs', async (req, res) => {
     if (!p.level) p.level = 1;
     if (!Number.isFinite(p.xp)) p.xp = 0;
     p.stats = p.stats || {};
-    await pool.query('INSERT INTO pnjs (id, data) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data', [p.id, JSON.stringify(p)]);
+    await pool.query(
+      'INSERT INTO pnjs (id, data) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data',
+      [p.id, JSON.stringify(p)]
+    );
     res.status(201).json(p);
   } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
 });
@@ -522,7 +644,11 @@ app.get('/api/pnjs/export', async (req, res) => {
 
 // =================== RACES (CRUD fichier JSON) ====================
 app.get('/api/races', (req, res) => res.json(races));
-app.get('/api/races/:id', (req, res) => { const race = races.find(r => r.id === req.params.id); if (!race) return res.status(404).json({ message: 'Race non trouvée' }); res.json(race); });
+app.get('/api/races/:id', (req, res) => {
+  const race = races.find(r => r.id === req.params.id);
+  if (!race) return res.status(404).json({ message: 'Race non trouvée' });
+  res.json(race);
+});
 app.post('/api/races', (req, res) => {
   const race = req.body || {};
   if (!race.name) return res.status(400).json({ message: 'name requis' });
@@ -531,11 +657,13 @@ app.post('/api/races', (req, res) => {
   race.family = race.family || 'custom'; race.canon = race.canon ?? false; race.baseStats = race.baseStats || {}; race.evolutionPaths = race.evolutionPaths || [];
   races.push(race); saveRaces(); res.status(201).json(race);
 });
-app.delete('/api/races/:id', (req, res) => { const i = races.findIndex(r => r.id === req.params.id); if (i === -1) return res.status(404).json({ message: 'Race non trouvée' }); const removed = races.splice(i, 1)[0]; saveRaces(); res.json(removed); });
+app.delete('/api/races/:id', (req, res) => {
+  const i = races.findIndex(r => r.id === req.params.id);
+  if (i === -1) return res.status(404).json({ message: 'Race non trouvée' });
+  const removed = races.splice(i, 1)[0]; saveRaces(); res.json(removed);
+});
 
 // =================== SESSIONS & CONTEXTE ====================
-
-// == Sessions helpers ==
 function fingerprint(text = '') { const s = String(text).toLowerCase().replace(/\s+/g,' ').slice(0, 500); let h = 0; for (let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i))|0; return String(h >>> 0); }
 async function getOrInitSession(sid) {
   const s = String(sid || '').trim();
@@ -553,7 +681,6 @@ async function getOrInitSession(sid) {
 async function saveSession(sid, data) {
   await pool.query(`INSERT INTO sessions (id, data) VALUES ($1,$2::jsonb) ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data`, [sid, JSON.stringify(data)]);
 }
-
 async function loadPnjsByIds(ids = []) {
   const out = [];
   for (const id of ids) {
@@ -561,20 +688,6 @@ async function loadPnjsByIds(ids = []) {
     if (r.rows.length) out.push(r.rows[0].data);
   }
   return out;
-}
-
-function compactCard(p) {
-  return {
-    id: p.id,
-    name: p.name,
-    appearance: p.appearance,
-    personalityTraits: p.personalityTraits,
-    backstoryHint: (p.backstory || '').split('\n').slice(-2).join(' ').slice(0, 300),
-    skills: Array.isArray(p.skills) ? p.skills.map(s => s.name).slice(0, 8) : [],
-    locationId: p.locationId,
-    canonId: p.canonId,
-    lockedTraits: p.lockedTraits
-  };
 }
 function continuityDossier(p) {
   return {
@@ -587,15 +700,66 @@ function continuityDossier(p) {
     ].filter(Boolean)
   };
 }
+// --- comportement PNJ “vivant” ---
+function deriveBehaviorFromTraits(p, userText='') {
+  const traits = Array.isArray(p?.personalityTraits) ? p.personalityTraits.map(t => String(t).toLowerCase()) : [];
+  const name = p?.name || 'PNJ';
+  const goals = [];
+  const taboos = [];
+  let mood = 'neutre';
+  let tone = 'calme';
+  const styleHints = [];
+
+  if (traits.includes('colérique') || traits.includes('impulsif')) {
+    mood = 'agacé'; tone = 'direct';
+    taboos.push('longs discours diplomatiques');
+    styleHints.push('phrases courtes', 'verbes d’action');
+  }
+  if (traits.includes('douce') || traits.includes('gentille') || traits.includes('bienveillant') || traits.includes('empathique')) {
+    mood = 'chaleureux'; tone = 'doux';
+    goals.push('rassurer l’interlocuteur', 'proposer de l’aide');
+    styleHints.push('mots rassurants', 'ponctuation légère');
+  }
+  if (traits.includes('fière') || traits.includes('arrogant') || traits.includes('noble')) {
+    tone = 'soutenu';
+    styleHints.push('registre soutenu', 'tournures formelles');
+    taboos.push('se rabaisser', 'montrer une faiblesse immédiate');
+  }
+  if (traits.includes('stratégique') || traits.includes('analytique') || traits.includes('sage')) {
+    goals.push('obtenir plus d’informations', 'évaluer les risques');
+    styleHints.push('questions ciblées', 'enchaînements logiques');
+  }
+
+  const lower = userText.toLowerCase();
+  if (lower.includes('aide') || lower.includes('secours')) {
+    goals.push('proposer un plan simple', 'répartir des tâches');
+  }
+  if (lower.includes('attaque') || lower.includes('menacer')) {
+    mood = mood === 'chaleureux' ? 'sérieux' : 'sur ses gardes';
+    goals.push('prévenir une escalade', 'protéger ses alliés');
+    taboos.push('provoquer inutilement');
+  }
+
+  const uniq = a => Array.from(new Set(a));
+  return {
+    name,
+    mood,
+    tone,
+    goals: uniq(goals).slice(0,3),
+    taboos: uniq(taboos).slice(0,3),
+    styleHints: uniq(styleHints).slice(0,4)
+  };
+}
 
 // -------- CONTEXT: prépare le tour de jeu --------
-/* Body accepté :
+/*
+Body:
 {
   "sid": "session-123",
   "userText": "Kael parle à Araniel...",
   "pnjIds": ["1758006092821"],
-  "pnjNames": ["Milim Nava"],       // ou
-  "name": "Milim Nava"              // équiv à pnjNames:[name]
+  "pnjNames": ["Milim Nava"],
+  "name": "Milim Nava"
 }
 */
 app.post('/api/engine/context', async (req, res) => {
@@ -614,24 +778,19 @@ app.post('/api/engine/context', async (req, res) => {
 
     let pnjs = [];
     if (pnjIds.length) {
-      // 1) Priorité aux ids explicites
       pnjs = await loadPnjsByIds(pnjIds);
     } else if (pnjNames.length) {
-      // 2) Résolution PAR NOM (robuste)
       const raw = String(pnjNames[0] || '').trim();
       if (raw) {
         let rows = [];
-        // 2.1 Exact (trim+lower)
         try {
           rows = (await pool.query(`SELECT data FROM pnjs WHERE trim(lower(data->>'name')) = trim(lower($1)) LIMIT 1`, [raw])).rows;
         } catch {}
-        // 2.2 Préfixe ("Milim%")
         if (!rows.length) {
           try {
             rows = (await pool.query(`SELECT data FROM pnjs WHERE lower(data->>'name') LIKE lower($1) ORDER BY data->>'name' LIMIT 5`, [raw.replace(/\s+/g,' ').trim() + '%'])).rows;
           } catch {}
         }
-        // 2.3 Tous mots contenus ("%milim%" AND "%nava%")
         if (!rows.length) {
           const tokens = raw.toLowerCase().split(/\s+/).filter(Boolean);
           if (tokens.length) {
@@ -642,7 +801,6 @@ app.post('/api/engine/context', async (req, res) => {
             } catch {}
           }
         }
-        // 2.4 Fallback LIKE large → hydrate par id
         if (!rows.length) {
           try {
             const likeRow = (await pool.query(`SELECT (data->>'id') AS id FROM pnjs WHERE lower(data->>'name') LIKE lower($1) ORDER BY data->>'name' LIMIT 1`, [`%${raw}%`])).rows[0];
@@ -653,9 +811,7 @@ app.post('/api/engine/context', async (req, res) => {
         }
       }
     } else {
-      // 3) Détection automatique depuis userText (quand ni pnjIds ni pnjNames)
       const txt = userText.toLowerCase();
-      // tokens >=3 caractères, uniques, limiter à 5 pour rester léger
       const tokens = Array.from(new Set(
         txt.split(/[^a-zàâçéèêëîïôùûüÿñœ'-]+/i)
            .map(t => t.trim())
@@ -664,30 +820,24 @@ app.post('/api/engine/context', async (req, res) => {
 
       let rows = [];
       if (tokens.length) {
-        // AND sur tous les tokens
         const wheres = tokens.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
         const params = tokens.map(t => `%${t}%`);
         try {
-          rows = (
-            await pool.query(
-              `SELECT data FROM pnjs WHERE ${wheres.join(' AND ')} ORDER BY data->>'name' LIMIT 6`,
-              params
-            )
-          ).rows;
+          rows = (await pool.query(
+            `SELECT data FROM pnjs WHERE ${wheres.join(' AND ')} ORDER BY data->>'name' LIMIT 6`,
+            params
+          )).rows;
         } catch {}
       }
-      // Fallback : 2 tokens les plus longs si rien trouvé
       if (!rows.length && tokens.length) {
         const top2 = [...tokens].sort((a,b)=>b.length-a.length).slice(0,2);
         const wheres = top2.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
         const params = top2.map(t => `%${t}%`);
         try {
-          rows = (
-            await pool.query(
-              `SELECT data FROM pnjs WHERE ${wheres.join(' AND ')} ORDER BY data->>'name' LIMIT 6`,
-              params
-            )
-          ).rows;
+          rows = (await pool.query(
+            `SELECT data FROM pnjs WHERE ${wheres.join(' AND ')} ORDER BY data->>'name' LIMIT 6`,
+            params
+          )).rows;
         } catch {}
       }
       pnjs = rows.map(r => r.data);
@@ -716,6 +866,12 @@ app.post('/api/engine/context', async (req, res) => {
     const roster = pnjCards.map(c => `${c.name}#${c.id}`).join(', ');
     const anchors = dossiers.map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`).join('\n');
 
+    // --- behaviors (vivants)
+    const behaviors = pnjs.slice(0, 8).map(p => ({ id: p.id, ...deriveBehaviorFromTraits(p, userText) }));
+    const behaviorLines = behaviors.map(b =>
+      `- ${b.name}#${b.id} :: mood=${b.mood} | tone=${b.tone} | goals=${b.goals.join('/')} | taboos=${b.taboos.join('/')} | style=${b.styleHints.join(', ')}`
+    ).join('\n');
+
     const systemHint =
 `[ENGINE CONTEXT]
 Session: ${sid}
@@ -728,6 +884,9 @@ ROSTER: ${roster}
 
 ANCHORS (continuité):
 ${anchors}
+
+BEHAVIOR CUES:
+${behaviorLines || '(n/a)'}
 
 Do/Don't: ${rules}
 
@@ -754,6 +913,7 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
       guard: { antiLoop: { token, lastHashes }, rules, style },
       pnjCards,
       dossiers,
+      behaviors,              // <-- nouveau
       systemHint,
       turn: Number(sess.data.turn || 0) + 1
     });
@@ -761,7 +921,7 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
     console.error('engine/context error:', e);
     return res.status(200).json({
       guard: { antiLoop: { token: null, lastHashes: [] }, rules: '', style: '' },
-      pnjCards: [], dossiers: [], systemHint: '', turn: 0, error: 'engine/context error'
+      pnjCards: [], dossiers: [], behaviors: [], systemHint: '', turn: 0, error: 'engine/context error'
     });
   }
 });
@@ -815,9 +975,10 @@ app.post('/api/engine/commit', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ message: 'engine/commit error' }); }
 });
 
-
 // ---------------- Lancement ----------------
 app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
+
+   
 
 
 
