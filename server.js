@@ -642,6 +642,72 @@ app.get('/api/pnjs/export', async (req, res) => {
   catch (e) { res.status(500).json({ message: 'DB error' }); }
 });
 
+// =================== CANON PROFILES (PostgreSQL) ====================
+app.get('/api/canon', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT data FROM canon_profiles');
+    res.json(rows.map(r => r.data));
+  } catch (e) {
+    console.error(e); res.status(500).json({ message: 'DB error' });
+  }
+});
+
+app.post('/api/canon', async (req, res) => {
+  try {
+    const c = req.body || {};
+    if (!c.name) return res.status(400).json({ message: 'name requis' });
+    // id facultatif → slug à partir du nom
+    c.id = c.id || String(c.name)
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .replace(/[^a-z0-9]+/g,'-')
+      .replace(/(^-|-$)/g,'');
+    await pool.query(
+      'INSERT INTO canon_profiles (id, data) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data',
+      [c.id, JSON.stringify(c)]
+    );
+    res.status(201).json(c);
+  } catch (e) {
+    console.error(e); res.status(500).json({ message: 'DB error' });
+  }
+});
+
+app.get('/api/canon/:canonId', async (req, res) => {
+  try {
+    const id = req.params.canonId;
+    const { rows } = await pool.query('SELECT data FROM canon_profiles WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'Canon non trouvé' });
+    res.json(rows[0].data);
+  } catch (e) {
+    console.error(e); res.status(500).json({ message: 'DB error' });
+  }
+});
+
+app.put('/api/canon/:canonId', async (req, res) => {
+  try {
+    const id = req.params.canonId;
+    const { rows } = await pool.query('SELECT data FROM canon_profiles WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'Canon non trouvé' });
+    const merged = { ...rows[0].data, ...req.body, id };
+    await pool.query('UPDATE canon_profiles SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
+    res.json(merged);
+  } catch (e) {
+    console.error(e); res.status(500).json({ message: 'DB error' });
+  }
+});
+
+app.delete('/api/canon/:canonId', async (req, res) => {
+  try {
+    const id = req.params.canonId;
+    const { rows } = await pool.query('DELETE FROM canon_profiles WHERE id = $1 RETURNING data', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'Canon non trouvé' });
+    res.json(rows[0].data);
+  } catch (e) {
+    console.error(e); res.status(500).json({ message: 'DB error' });
+  }
+});
+
+
 // =================== RACES (CRUD fichier JSON) ====================
 app.get('/api/races', (req, res) => res.json(races));
 app.get('/api/races/:id', (req, res) => {
@@ -974,11 +1040,28 @@ app.post('/api/engine/commit', async (req, res) => {
     res.json({ ok: true, turn: sess.data.turn, lastHash: fp });
   } catch (e) { console.error(e); res.status(500).json({ message: 'engine/commit error' }); }
 });
+// =================== STYLE & CONTENT SETTINGS ====================
+app.get('/api/style', (req, res) => {
+  res.json({ styleText: String(narrativeStyle?.styleText || '') });
+});
+
+app.post('/api/style', (req, res) => {
+  narrativeStyle = req.body || { styleText: '' };
+  res.json({ message: 'Style mis à jour.' });
+});
+
+app.post('/api/settings/content', (req, res) => {
+  const allowed = ['safe','mature','fade'];
+  const lvl = String(req.body?.explicitLevel || '').toLowerCase();
+  if (allowed.includes(lvl)) contentSettings.explicitLevel = lvl;
+  res.json({ explicitLevel: contentSettings.explicitLevel });
+});
 
 // ---------------- Lancement ----------------
 app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
 
    
+
 
 
 
