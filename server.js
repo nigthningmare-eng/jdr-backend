@@ -992,11 +992,73 @@ app.get('/api/db/health', async (req, res) => {
   try { await pool.query('SELECT 1'); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ ok: false, error: 'DB error' }); }
 });
+// ========= PRELOAD PAGINÉ (batch) =========
+// Charge les PNJ par lots avec projection (id,name,appearance,backstory,personalityTraits, etc.)
+app.post('/api/engine/preload', async (req, res) => {
+  try {
+    const { sid = 'default', limit = 100, cursor = 0, fields = '' } = req.body || {};
+    const off = Math.max(parseInt(cursor, 10) || 0, 0);
+    // Conseil pratique: garder des lots raisonnables (50–200) pour le connecteur
+    const lim = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 200);
+
+    // Compte total
+    const countRes = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs');
+    const total = countRes.rows[0].n;
+
+    // Page
+    const { rows } = await pool.query(
+      `SELECT data FROM pnjs
+       ORDER BY (data->>'name') NULLS LAST, id
+       LIMIT $1 OFFSET $2`,
+      [lim, off]
+    );
+
+    let items = rows.map(r => r.data);
+
+    // Projection optionnelle pour alléger la charge
+    if (fields) {
+      const pick = new Set(
+        String(fields)
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean)
+      );
+      items = items.map(p => {
+        const o = {};
+        for (const k of pick) o[k] = p[k];
+        return o;
+      });
+    }
+
+    const nextCursor = off + items.length < total ? off + items.length : null;
+
+    // Alimente la continuité de session (ancres)
+    const sess = await getOrInitSession(sid);
+    sess.data.dossiersById = sess.data.dossiersById || {};
+    for (const p of rows.map(r => r.data)) {
+      sess.data.dossiersById[p.id] = continuityDossier(p);
+    }
+    await saveSession(sid, sess.data);
+
+    res.json({
+      total,
+      loaded: items.length,
+      cursor: off,
+      nextCursor,
+      items
+    });
+  } catch (e) {
+    console.error('POST /api/engine/preload error:', e);
+    res.status(500).json({ message: 'preload error' });
+  }
+});
+
 
 // ---------------- Lancement ----------------
 app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
 
    
+
 
 
 
