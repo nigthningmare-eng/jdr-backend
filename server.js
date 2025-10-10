@@ -1053,11 +1053,54 @@ app.post('/api/engine/preload', async (req, res) => {
   }
 });
 
+// ===== ENGINE PRELOAD (chargement paginé des PNJ pour GPT & scripts) =====
+app.post('/api/engine/preload', async (req, res) => {
+  // body: { sid?: string, limit?: number, cursor?: number, fields?: string }
+  const limit = Math.max(1, Math.min(parseInt(req.body?.limit ?? '100', 10), 200)); // autorise 200 max
+  const cursor = Math.max(0, parseInt(req.body?.cursor ?? '0', 10));
+  const fields = (req.body?.fields || '').toString().trim();
+
+  try {
+    // total
+    const totalRes = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs');
+    const total = totalRes.rows[0].n;
+
+    // page
+    const { rows } = await pool.query(
+      `SELECT data FROM pnjs
+       ORDER BY (data->>'name') NULLS LAST, id
+       LIMIT $1 OFFSET $2`,
+      [limit, cursor]
+    );
+
+    let items = rows.map(r => r.data);
+    if (fields) {
+      const pick = new Set(fields.split(',').map(s => s.trim()).filter(Boolean));
+      items = items.map(p => { const out = {}; for (const k of pick) out[k] = p[k]; return out; });
+    }
+
+    const nextCursor = (cursor + items.length < total) ? cursor + items.length : null;
+    res.json({
+      total,
+      loaded: items.length,
+      nextCursor,           // <— très important pour boucler côté client/GPT
+      items
+    });
+  } catch (e) {
+    console.error('POST /api/engine/preload error:', e);
+    res.status(500).json({ message: 'DB error' });
+  }
+});
+
+
+
+
 
 // ---------------- Lancement ----------------
 app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
 
    
+
 
 
 
