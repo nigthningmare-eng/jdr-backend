@@ -386,6 +386,26 @@ app.delete('/api/pnjs', async (req, res) => {
     res.json({ deletedIds: ids });
   } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
 });
+// POST safe — suppression unitaire par body {id}
+app.post('/api/pnjs/delete', async (req, res) => {
+  try {
+    const id = String(req.body?.id || '').trim();
+    if (!id) return res.status(400).json({ message: 'id requis' });
+    const r = await pool.query('DELETE FROM pnjs WHERE id = $1 RETURNING data', [id]);
+    if (!r.rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
+    res.json({ deleted: r.rows[0].data });
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+// POST safe — suppression multiple par body {ids: []}
+app.post('/api/pnjs/bulk-delete', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
+    if (!ids.length) return res.status(400).json({ message: 'ids[] requis' });
+    await pool.query('DELETE FROM pnjs WHERE id = ANY($1::text[])', [ids]);
+    res.json({ deletedIds: ids });
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
 
 // XP
 app.post('/api/pnjs/:id/award-xp', async (req, res) => {
@@ -1100,6 +1120,7 @@ app.post('/api/engine/preload', async (req, res) => {
 app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
 
    
+
 
 
 
