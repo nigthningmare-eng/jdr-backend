@@ -103,7 +103,7 @@ function softenStyle(text, level = 'mature') {
 }
 
 // =================== PNJ (PostgreSQL) ====================
-// LISTE paginée + projection + filtre SQL; TOUJOURS 200 (évite les connector errors)
+// LISTE paginée + projection + filtre SQL (limite max 1000)
 app.get('/api/pnjs', async (req, res) => {
   res.set('Content-Type', 'application/json; charset=utf-8');
   const limitMax = 1000;
@@ -164,7 +164,6 @@ app.post('/api/pnjs/bulk', async (req, res) => {
       return pn;
     });
 
-    // transaction simple
     await pool.query('BEGIN');
     for (const p of toUpsert) {
       await pool.query(
@@ -377,7 +376,7 @@ app.delete('/api/pnjs/:id', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
 });
 
-// DELETE en masse (par ids)
+// DELETE en masse (par ids, DELETE)
 app.delete('/api/pnjs', async (req, res) => {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
@@ -386,6 +385,7 @@ app.delete('/api/pnjs', async (req, res) => {
     res.json({ deletedIds: ids });
   } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
 });
+
 // POST safe — suppression unitaire par body {id}
 app.post('/api/pnjs/delete', async (req, res) => {
   try {
@@ -637,65 +637,76 @@ function continuityDossier(p) {
   };
 }
 
-// ============ A. Helper: chargement global ============
-async function loadAllPnjs(limit = 1000, fields = '') {
-  const limitMax = Math.min(Math.max(parseInt(limit, 10) || 1000, 1), 1000);
-  const pick = new Set((fields || '').split(',').map(s => s.trim()).filter(Boolean));
-
-  const countRes = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs');
-  const total = countRes.rows[0].n;
-
-  const items = [];
-  const chunk = 200;
-  let offset = 0;
-  while (offset < total && items.length < limitMax) {
-    const { rows } = await pool.query(
-      `SELECT data FROM pnjs ORDER BY (data->>'name') NULLS LAST, id LIMIT $1 OFFSET $2`,
-      [chunk, offset]
-    );
-    for (const r of rows) {
-      if (items.length >= limitMax) break;
-      const p = r.data;
-      if (pick.size) {
-        const out = {};
-        for (const k of pick) out[k] = p[k];
-        items.push(out);
-      } else {
-        items.push(p);
-      }
-    }
-    offset += chunk;
-  }
-  return { total, loaded: items.length, items };
-}
-
-// ============ B. Endpoint: /api/engine/preload ============
-/*
-  POST /api/engine/preload
-  Body: { sid?: string, limit?: number=1000, fields?: "id,name,appearance,backstory,personalityTraits" }
-  Retourne: { total, loaded, items[], pnjCards[] (limités à 50 pour l’UI) }
-*/
+// ===== ENGINE PRELOAD (chargement paginé des PNJ pour GPT & scripts) =====
 app.post('/api/engine/preload', async (req, res) => {
-  try {
-    const sid = String(req.body?.sid || 'default');
-    const limit = Number.isFinite(req.body?.limit) ? req.body.limit : 1000;
-    const fields = String(req.body?.fields || '');
-    const sess = await getOrInitSession(sid);
+  // body: { sid?: string, limit?: number, cursor?: number, fields?: string }
+  const limit = Math.max(1, Math.min(parseInt(req.body?.limit ?? '100', 10), 200)); // autorise 200 max
+  const cursor = Math.max(0, parseInt(req.body?.cursor ?? '0', 10));
+  const fields = (req.body?.fields || '').toString().trim();
 
-    const { total, loaded, items } = await loadAllPnjs(limit, fields);
-    // stocke des ancres de continuité pour les 100 premiers max
-    for (const p of items.slice(0, 100)) {
-      if (!p?.id) continue;
+  try {
+    // total
+    const totalRes = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs');
+    const total = totalRes.rows[0].n;
+
+    // page
+    const { rows } = await pool.query(
+      `SELECT data FROM pnjs
+       ORDER BY (data->>'name') NULLS LAST, id
+       LIMIT $1 OFFSET $2`,
+      [limit, cursor]
+    );
+
+    let items = rows.map(r => r.data);
+    if (fields) {
+      const pick = new Set(fields.split(',').map(s => s.trim()).filter(Boolean));
+      items = items.map(p => { const out = {}; for (const k of pick) out[k] = p[k]; return out; });
+    }
+
+    const nextCursor = (cursor + items.length < total) ? cursor + items.length : null;
+
+    // Alimente la continuité de session (ancres)
+    const sid = String(req.body?.sid || 'default');
+    const sess = await getOrInitSession(sid);
+    sess.data.dossiersById = sess.data.dossiersById || {};
+    for (const p of rows.map(r => r.data)) {
       sess.data.dossiersById[p.id] = continuityDossier(p);
     }
     await saveSession(sid, sess.data);
 
-    const pnjCards = items.slice(0, 50).map(compactCard); // utile pour prompt UI
-    return res.status(200).json({ total, loaded, items, pnjCards });
+    res.json({ total, loaded: items.length, nextCursor, items });
   } catch (e) {
-    console.error('/api/engine/preload error:', e);
-    return res.status(500).json({ message: 'preload error' });
+    console.error('POST /api/engine/preload error:', e);
+    res.status(500).json({ message: 'DB error' });
   }
+});
+
+// --- PIN / REFRESH DE CONTEXTE ---
+app.post('/api/engine/pin', async (req, res) => {
+  try {
+    const sid = String(req.body?.sid || 'default');
+    const pnjIds = Array.isArray(req.body?.pnjIds) ? req.body.pnjIds.map(String) : [];
+    const sess = await getOrInitSession(sid);
+    sess.data.pinRoster = pnjIds.slice(0, 8); // on épingle 8 PNJ max
+    await saveSession(sid, sess.data);
+    res.json({ ok: true, pinRoster: sess.data.pinRoster });
+  } catch (e) { console.error(e); res.status(500).json({ message: 'engine/pin error' }); }
+});
+
+// Recharge les PNJ épinglés et reconstruit des cartes compactes à la demande
+app.post('/api/engine/refresh', async (req, res) => {
+  try {
+    const sid = String(req.body?.sid || 'default');
+    const sess = await getOrInitSession(sid);
+    const ids = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
+    const pnjs = await loadPnjsByIds(ids);
+    const pnjCards = pnjs.map(compactCard);
+    // Met à jour les dossiers d’ancrage
+    sess.data.dossiersById = sess.data.dossiersById || {};
+    for (const p of pnjs) sess.data.dossiersById[p.id] = continuityDossier(p);
+    await saveSession(sid, sess.data);
+    res.json({ ok: true, pnjCards, dossiers: ids.map(id => sess.data.dossiersById[id]).filter(Boolean) });
+  } catch (e) { console.error(e); res.status(500).json({ message: 'engine/refresh error' }); }
 });
 
 // -------- CONTEXT: prépare le tour de jeu --------
@@ -705,10 +716,7 @@ app.post('/api/engine/preload', async (req, res) => {
   "userText": "Kael parle à Araniel...",
   "pnjIds": ["1758006092821"],
   "pnjNames": ["Milim Nava"],       // ou
-  "name": "Milim Nava",             // équiv à pnjNames:[name]
-  "loadAll": true,                  // C. charge jusqu’à 1000 PNJ d’un coup
-  "limit": 1000,                    // optionnel (par défaut 1000)
-  "fields": "id,name,appearance,backstory,personalityTraits" // optionnel
+  "name": "Milim Nava"              // équiv à pnjNames:[name]
 }
 */
 app.post('/api/engine/context', async (req, res) => {
@@ -719,77 +727,11 @@ app.post('/api/engine/context', async (req, res) => {
     const userText = String(body.userText || '');
     const pnjIds = Array.isArray(body.pnjIds) ? body.pnjIds : [];
     const pnjNames = Array.isArray(body.pnjNames) ? body.pnjNames : (body.name ? [String(body.name)] : []);
-    const loadAll = Boolean(body.loadAll);
-    const allLimit = Number.isFinite(body.limit) ? body.limit : 1000;
-    const allFields = String(body.fields || '');
 
     const sess = await getOrInitSession(sid);
 
     const lastHashes = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies.slice(-3) : [];
     const token = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
-
-    // ==== C. Mode "charger tout" ====
-    if (loadAll) {
-      const { total, loaded, items } = await loadAllPnjs(allLimit, allFields);
-
-      const pnjCards = items.slice(0, 50).map(compactCard);
-      sess.data.dossiersById = sess.data.dossiersById || {};
-      for (const p of items.slice(0, 100)) {
-        if (!p?.id) continue;
-        sess.data.dossiersById[p.id] = continuityDossier(p);
-      }
-      await saveSession(sid, sess.data);
-      const dossiers = items.slice(0, 100).map(p => sess.data.dossiersById[p.id]).filter(Boolean);
-
-      const rules = [
-        'Toujours respecter lockedTraits.',
-        "Ne jamais changer l'identité d'un PNJ (Nom, race, relations clés).",
-        'Évite les répétitions (ne recopie pas mot pour mot les 2 dernières répliques).',
-        'Si doute, demande une micro-clarification.'
-      ].join(' ');
-
-      const styleText = String(narrativeStyle?.styleText || '').trim();
-      const contentGuard = `Niveau contenu: ${contentSettings?.explicitLevel || 'mature'} (pas de détails graphiques).`;
-      const style = [styleText || 'Light novel isekai, sobre, immersif.', contentGuard].join(' ');
-
-      const roster = pnjCards.map(c => `${c.name}#${c.id}`).join(', ');
-      const anchors = dossiers.map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`).join('\n');
-
-      const systemHint =
-`[ENGINE CONTEXT]
-Session: ${sid}
-Tour: ${Number(sess.data.turn || 0) + 1}
-AntiLoopToken: ${token}
-
-STYLE: ${style}
-
-ROSTER (échantillon): ${roster}
-
-ANCHORS (continuité — échantillon):
-${anchors}
-
-Do/Don't: ${rules}
-
-PNJ cards (échantillon):
-${pnjCards.map(c => `- ${c.name}#${c.id}
-  traits: ${JSON.stringify(c.personalityTraits || [])}
-  locked: ${JSON.stringify(c.lockedTraits || [])}
-  backstoryHint: ${c.backstoryHint || '(n/a)'}
-  skills: ${JSON.stringify(c.skills || [])}
-  location: ${c.locationId || '(n/a)'}
-`).join('\n')}
-`;
-
-      return res.status(200).json({
-        guard: { antiLoop: { token, lastHashes }, rules, style },
-        pnjCards,
-        dossiers,
-        // renvoyer AUSSI la liste brute pour que l’UI puisse tout afficher
-        all: { total, loaded, items },
-        systemHint,
-        turn: Number(sess.data.turn || 0) + 1
-      });
-    }
 
     // ==== Mode normal (résolution par ids ou noms) ====
     let pnjs = [];
@@ -864,6 +806,27 @@ ${pnjCards.map(c => `- ${c.name}#${c.id}
       pnjs = rows.map(r => r.data);
     }
 
+    // --- POINT 3 : réhydratation, épinglage, mémo (dans /api/engine/context) ---
+    // 3.1) Si on n’a rien trouvé mais qu’un roster est épinglé → recharge
+    if (!pnjs.length) {
+      const pinned = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
+      if (pinned.length) {
+        pnjs = await loadPnjsByIds(pinned);
+      }
+    }
+    // 3.2) Si des ids sont fournis → on met à jour le pinRoster
+    const providedIds = Array.isArray(body.pnjIds) ? body.pnjIds.map(String) : [];
+    if (providedIds.length) {
+      sess.data.pinRoster = providedIds.slice(0, 8);
+      await saveSession(sid, sess.data);
+    }
+    // 3.3) Mémo des derniers résumés
+    const lastNotes = Array.isArray(sess.data.notes) ? sess.data.notes.slice(-5) : [];
+    const memo = lastNotes.length
+      ? `\nMEMO (résumés précédents):\n- ${lastNotes.join('\n- ')}\n`
+      : '';
+
+    // Fiches compactes & ancres
     const pnjCards = pnjs.slice(0, 8).map(compactCard);
     sess.data.dossiersById = sess.data.dossiersById || {};
     for (const p of pnjs.slice(0, 8)) {
@@ -888,7 +851,7 @@ ${pnjCards.map(c => `- ${c.name}#${c.id}
 
     const systemHint =
 `[ENGINE CONTEXT]
-Session: ${sid}
+${memo}Session: ${sid}
 Tour: ${Number(sess.data.turn || 0) + 1}
 AntiLoopToken: ${token}
 
@@ -935,25 +898,6 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
     });
   }
 });
-// Si rien de fourni mais qu’on a un pinRoster en session → on réhydrate
-if (!pnjs.length) {
-  const pinned = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
-  if (pinned.length) {
-    pnjs = await loadPnjsByIds(pinned);
-  }
-}
-
-// Si l’appel fournit pnjIds → on actualise le pinRoster (ça “colle” pour les tours suivants)
-const providedIds = Array.isArray(body.pnjIds) ? body.pnjIds.map(String) : [];
-if (providedIds.length) {
-  sess.data.pinRoster = providedIds.slice(0, 8);
-  await saveSession(sid, sess.data);
-}
-
-// Bonus : injecter un “mémo” narratif en haut du systemHint avec tes résumés persistés
-const lastNotes = Array.isArray(sess.data.notes) ? sess.data.notes.slice(-5) : [];
-const memo = lastNotes.length ? `\nMEMO (résumés précédents):\n- ${lastNotes.join('\n- ')}\n` : '';
-
 
 // -------- COMMIT: enregistre ce qui s'est passé --------
 app.post('/api/engine/commit', async (req, res) => {
@@ -1031,195 +975,6 @@ app.get('/api/db/health', async (req, res) => {
   try { await pool.query('SELECT 1'); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ ok: false, error: 'DB error' }); }
 });
-// ========= PRELOAD PAGINÉ (batch) =========
-// Charge les PNJ par lots avec projection (id,name,appearance,backstory,personalityTraits, etc.)
-app.post('/api/engine/preload', async (req, res) => {
-  try {
-    const { sid = 'default', limit = 100, cursor = 0, fields = '' } = req.body || {};
-    const off = Math.max(parseInt(cursor, 10) || 0, 0);
-    // Conseil pratique: garder des lots raisonnables (50–200) pour le connecteur
-    const lim = Math.min(Math.max(parseInt(limit, 10) || 100, 1), 200);
-
-    // Compte total
-    const countRes = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs');
-    const total = countRes.rows[0].n;
-
-    // Page
-    const { rows } = await pool.query(
-      `SELECT data FROM pnjs
-       ORDER BY (data->>'name') NULLS LAST, id
-       LIMIT $1 OFFSET $2`,
-      [lim, off]
-    );
-
-    let items = rows.map(r => r.data);
-
-    // Projection optionnelle pour alléger la charge
-    if (fields) {
-      const pick = new Set(
-        String(fields)
-          .split(',')
-          .map(s => s.trim())
-          .filter(Boolean)
-      );
-      items = items.map(p => {
-        const o = {};
-        for (const k of pick) o[k] = p[k];
-        return o;
-      });
-    }
-
-    const nextCursor = off + items.length < total ? off + items.length : null;
-
-    // Alimente la continuité de session (ancres)
-    const sess = await getOrInitSession(sid);
-    sess.data.dossiersById = sess.data.dossiersById || {};
-    for (const p of rows.map(r => r.data)) {
-      sess.data.dossiersById[p.id] = continuityDossier(p);
-    }
-    await saveSession(sid, sess.data);
-
-    res.json({
-      total,
-      loaded: items.length,
-      cursor: off,
-      nextCursor,
-      items
-    });
-  } catch (e) {
-    console.error('POST /api/engine/preload error:', e);
-    res.status(500).json({ message: 'preload error' });
-  }
-});
-
-// ===== ENGINE PRELOAD (chargement paginé des PNJ pour GPT & scripts) =====
-app.post('/api/engine/preload', async (req, res) => {
-  // body: { sid?: string, limit?: number, cursor?: number, fields?: string }
-  const limit = Math.max(1, Math.min(parseInt(req.body?.limit ?? '100', 10), 200)); // autorise 200 max
-  const cursor = Math.max(0, parseInt(req.body?.cursor ?? '0', 10));
-  const fields = (req.body?.fields || '').toString().trim();
-
-  try {
-    // total
-    const totalRes = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs');
-    const total = totalRes.rows[0].n;
-
-    // page
-    const { rows } = await pool.query(
-      `SELECT data FROM pnjs
-       ORDER BY (data->>'name') NULLS LAST, id
-       LIMIT $1 OFFSET $2`,
-      [limit, cursor]
-    );
-
-    let items = rows.map(r => r.data);
-    if (fields) {
-      const pick = new Set(fields.split(',').map(s => s.trim()).filter(Boolean));
-      items = items.map(p => { const out = {}; for (const k of pick) out[k] = p[k]; return out; });
-    }
-
-    const nextCursor = (cursor + items.length < total) ? cursor + items.length : null;
-    res.json({
-      total,
-      loaded: items.length,
-      nextCursor,           // <— très important pour boucler côté client/GPT
-      items
-    });
-  } catch (e) {
-    console.error('POST /api/engine/preload error:', e);
-    res.status(500).json({ message: 'DB error' });
-  }
-});
-
-
-// --- PIN / REFRESH DE CONTEXTE ---
-app.post('/api/engine/pin', async (req, res) => {
-  try {
-    const sid = String(req.body?.sid || 'default');
-    const pnjIds = Array.isArray(req.body?.pnjIds) ? req.body.pnjIds.map(String) : [];
-    const sess = await getOrInitSession(sid);
-    sess.data.pinRoster = pnjIds.slice(0, 8); // on épingle 8 PNJ max
-    await saveSession(sid, sess.data);
-    res.json({ ok: true, pinRoster: sess.data.pinRoster });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'engine/pin error' }); }
-});
-
-// Recharge les PNJ épinglés et reconstruit des cartes compactes à la demande
-app.post('/api/engine/refresh', async (req, res) => {
-  try {
-    const sid = String(req.body?.sid || 'default');
-    const sess = await getOrInitSession(sid);
-    const ids = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
-    const pnjs = await loadPnjsByIds(ids);
-    const pnjCards = pnjs.map(compactCard);
-    // Met à jour les dossiers d’ancrage
-    sess.data.dossiersById = sess.data.dossiersById || {};
-    for (const p of pnjs) sess.data.dossiersById[p.id] = continuityDossier(p);
-    await saveSession(sid, sess.data);
-    res.json({ ok: true, pnjCards, dossiers: ids.map(id => sess.data.dossiersById[id]).filter(Boolean) });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'engine/refresh error' }); }
-});
-
-app.post('/api/engine/summarize', async (req, res) => {
-  try {
-    const sid = String(req.body?.sid || 'default');
-    const text = String(req.body?.text || '').trim().slice(0, 800);
-    if (!text) return res.status(400).json({ message: 'text requis' });
-    const sess = await getOrInitSession(sid);
-    sess.data.notes = Array.isArray(sess.data.notes) ? sess.data.notes : [];
-    sess.data.notes.push(text);
-    if (sess.data.notes.length > 80) sess.data.notes = sess.data.notes.slice(-80);
-    await saveSession(sid, sess.data);
-    res.json({ ok: true, notesCount: sess.data.notes.length });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'engine/summarize error' }); }
-});
-
-
-
-
-
-
-
-
-
-
 
 // ---------------- Lancement ----------------
 app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
-
-   
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
