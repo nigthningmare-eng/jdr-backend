@@ -935,6 +935,25 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
     });
   }
 });
+// Si rien de fourni mais qu’on a un pinRoster en session → on réhydrate
+if (!pnjs.length) {
+  const pinned = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
+  if (pinned.length) {
+    pnjs = await loadPnjsByIds(pinned);
+  }
+}
+
+// Si l’appel fournit pnjIds → on actualise le pinRoster (ça “colle” pour les tours suivants)
+const providedIds = Array.isArray(body.pnjIds) ? body.pnjIds.map(String) : [];
+if (providedIds.length) {
+  sess.data.pinRoster = providedIds.slice(0, 8);
+  await saveSession(sid, sess.data);
+}
+
+// Bonus : injecter un “mémo” narratif en haut du systemHint avec tes résumés persistés
+const lastNotes = Array.isArray(sess.data.notes) ? sess.data.notes.slice(-5) : [];
+const memo = lastNotes.length ? `\nMEMO (résumés précédents):\n- ${lastNotes.join('\n- ')}\n` : '';
+
 
 // -------- COMMIT: enregistre ce qui s'est passé --------
 app.post('/api/engine/commit', async (req, res) => {
@@ -1113,6 +1132,55 @@ app.post('/api/engine/preload', async (req, res) => {
 });
 
 
+// --- PIN / REFRESH DE CONTEXTE ---
+app.post('/api/engine/pin', async (req, res) => {
+  try {
+    const sid = String(req.body?.sid || 'default');
+    const pnjIds = Array.isArray(req.body?.pnjIds) ? req.body.pnjIds.map(String) : [];
+    const sess = await getOrInitSession(sid);
+    sess.data.pinRoster = pnjIds.slice(0, 8); // on épingle 8 PNJ max
+    await saveSession(sid, sess.data);
+    res.json({ ok: true, pinRoster: sess.data.pinRoster });
+  } catch (e) { console.error(e); res.status(500).json({ message: 'engine/pin error' }); }
+});
+
+// Recharge les PNJ épinglés et reconstruit des cartes compactes à la demande
+app.post('/api/engine/refresh', async (req, res) => {
+  try {
+    const sid = String(req.body?.sid || 'default');
+    const sess = await getOrInitSession(sid);
+    const ids = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
+    const pnjs = await loadPnjsByIds(ids);
+    const pnjCards = pnjs.map(compactCard);
+    // Met à jour les dossiers d’ancrage
+    sess.data.dossiersById = sess.data.dossiersById || {};
+    for (const p of pnjs) sess.data.dossiersById[p.id] = continuityDossier(p);
+    await saveSession(sid, sess.data);
+    res.json({ ok: true, pnjCards, dossiers: ids.map(id => sess.data.dossiersById[id]).filter(Boolean) });
+  } catch (e) { console.error(e); res.status(500).json({ message: 'engine/refresh error' }); }
+});
+
+app.post('/api/engine/summarize', async (req, res) => {
+  try {
+    const sid = String(req.body?.sid || 'default');
+    const text = String(req.body?.text || '').trim().slice(0, 800);
+    if (!text) return res.status(400).json({ message: 'text requis' });
+    const sess = await getOrInitSession(sid);
+    sess.data.notes = Array.isArray(sess.data.notes) ? sess.data.notes : [];
+    sess.data.notes.push(text);
+    if (sess.data.notes.length > 80) sess.data.notes = sess.data.notes.slice(-80);
+    await saveSession(sid, sess.data);
+    res.json({ ok: true, notesCount: sess.data.notes.length });
+  } catch (e) { console.error(e); res.status(500).json({ message: 'engine/summarize error' }); }
+});
+
+
+
+
+
+
+
+
 
 
 
@@ -1120,6 +1188,7 @@ app.post('/api/engine/preload', async (req, res) => {
 app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
 
    
+
 
 
 
