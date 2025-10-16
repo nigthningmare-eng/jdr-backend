@@ -1,4 +1,4 @@
-// ==== JDR Backend (PNJ Postgres + CRUD + Contexte narratif robuste) ====
+// ==== JDR Backend (PNJ Postgres + CRUD + Contexte narratif robuste + Canon + Backups) ====
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
@@ -49,7 +49,7 @@ const pool = new Pool({
 
 // ---------- Mémoire légère (fichiers locaux) ----------
 let storyState = safeRequire('./storyState.json', {});
-let narrativeStyle = { styleText: '' }; // persiste en mémoire process; set via /api/style
+let narrativeStyle = { styleText: '' }; // set via /api/style
 let contentSettings = { explicitLevel: 'mature' }; // 'safe' | 'mature' | 'fade'
 
 const racesPath = './races.json';
@@ -102,6 +102,110 @@ function softenStyle(text, level = 'mature') {
     .concat('\n\n(La scène reste suggestive, sans détails graphiques.)');
 }
 
+function pick(obj, fieldsCsv) {
+  const f = new Set(String(fieldsCsv || '').split(',').map(s => s.trim()).filter(Boolean));
+  if (!f.size) return obj;
+  const out = {};
+  for (const k of f) out[k] = obj[k];
+  return out;
+}
+
+// ======================= BIBLIOTHÈQUE CANON (stats & skills) =======================
+// ⚠️ Exemples condensés/raisonnables pour tenir en taille — libre à toi d’enrichir.
+const CANON_LIB = {
+  tensura: {
+    meta: { label: "That Time I Got Reincarnated as a Slime (Tensura)" },
+    baseStats: { hp: 120, mp: 150, strength: 14, defense: 12, magic: 18, speed: 14, resistance: 16, charisma: 12 },
+    skills: [
+      { name: "Great Sage", type: "unique", effect: "Analyse et conseils tactiques" },
+      { name: "Predator", type: "unique", effect: "Absorption et acquisition de compétences" },
+      { name: "Black Flame", type: "magic", effect: "Dégâts magiques de feu noir" },
+      { name: "Full Body Reinforcement", type: "buff", effect: "Augmente stats globales" }
+    ]
+  },
+  kumo: {
+    meta: { label: "Kumo Desu ga, Nani ka?" },
+    baseStats: { hp: 100, mp: 120, strength: 12, defense: 10, magic: 16, speed: 18, resistance: 14, charisma: 8 },
+    skills: [
+      { name: "Thread Control", type: "skill", effect: "Contrôle de fils/soie pour piéger" },
+      { name: "Poison Synthesis", type: "skill", effect: "Créer/renforcer des poisons" },
+      { name: "Appraisal", type: "utility", effect: "Évaluer ennemis/objets" },
+      { name: "Parallel Minds", type: "unique", effect: "Pensées parallèles pour multi-tâches" }
+    ]
+  },
+  shieldHero: {
+    meta: { label: "The Rising of the Shield Hero" },
+    baseStats: { hp: 140, mp: 80, strength: 10, defense: 20, magic: 10, speed: 10, resistance: 18, charisma: 12 },
+    skills: [
+      { name: "Shield Prison", type: "defense", effect: "Barrière protectrice" },
+      { name: "Air Strike Shield", type: "defense", effect: "Bouclier à distance" },
+      { name: "Iron Maiden", type: "ultimate", effect: "Dégâts massifs sous conditions de malédiction" },
+      { name: "Curse Series", type: "curse", effect: "Pouvoirs de malédiction avec contreparties" }
+    ]
+  },
+  overlord: {
+    meta: { label: "Overlord" },
+    baseStats: { hp: 160, mp: 200, strength: 16, defense: 16, magic: 22, speed: 12, resistance: 20, charisma: 18 },
+    skills: [
+      { name: "Super-Tier Magic", type: "magic", effect: "Sorts d’un niveau supérieur" },
+      { name: "Undead Creation", type: "summon", effect: "Créer/contrôler morts-vivants" },
+      { name: "Perfect Unknowable", type: "utility", effect: "Invisibilité/perception réduite" },
+      { name: "Time Stop", type: "magic", effect: "Arrêt du temps (court)" }
+    ]
+  },
+  dragonQuest: {
+    meta: { label: "Dragon Quest" },
+    baseStats: { hp: 110, mp: 90, strength: 15, defense: 12, magic: 12, speed: 14, resistance: 12, charisma: 10 },
+    skills: [
+      { name: "Frizz/Frizzle", type: "magic", effect: "Magie de feu basique/intermédiaire" },
+      { name: "Heal/Moreheal", type: "healing", effect: "Soins basiques/intermédiaires" },
+      { name: "Falcon Slash", type: "technique", effect: "Double frappe rapide" },
+      { name: "Kazap", type: "magic", effect: "Puissante magie électrique" }
+    ]
+  }
+};
+
+function clone(v) { return JSON.parse(JSON.stringify(v)); }
+
+function mergeCanonIntoPnj(p, canonProfile, opts = { mode: 'fill', franchise: null }) {
+  const mode = opts.mode === 'overwrite' ? 'overwrite' : 'fill';
+  const out = clone(p);
+
+  // 1) Applique profil canon (table canon_profiles) : appearance, traits, skills, backstory…
+  if (canonProfile) {
+    const c = canonProfile;
+    for (const key of ['appearance','personalityTraits','skills','backstory','raceId','raceName','description']) {
+      if (c[key] !== undefined) {
+        if (mode === 'overwrite' || out[key] == null || (Array.isArray(out[key]) && !out[key].length)) out[key] = clone(c[key]);
+      }
+    }
+  }
+
+  // 2) Applique preset franchise (stats + compétences) si demandé
+  if (opts.franchise && CANON_LIB[opts.franchise]) {
+    const preset = CANON_LIB[opts.franchise];
+    out.stats = out.stats || {};
+    const statKeys = Object.keys(preset.baseStats || {});
+    for (const k of statKeys) {
+      if (mode === 'overwrite' || out.stats[k] == null) out.stats[k] = preset.baseStats[k];
+    }
+    // fusion compétences
+    const existing = new Set((out.skills || []).map(s => s.name));
+    const mergedSkills = Array.isArray(out.skills) ? clone(out.skills) : [];
+    for (const s of preset.skills || []) {
+      if (!existing.has(s.name)) mergedSkills.push(clone(s));
+    }
+    out.skills = mergedSkills;
+  }
+
+  // 3) Valeurs par défaut
+  out.level = Number.isFinite(out.level) ? out.level : 1;
+  out.xp = Number.isFinite(out.xp) ? out.xp : 0;
+  out.stats = out.stats || { hp: 100, mp: 50, strength: 10, defense: 10, magic: 10, speed: 10, resistance: 10, charisma: 10 };
+
+  return out;
+}
+
 // =================== PNJ (PostgreSQL) ====================
 // LISTE paginée + projection + filtre SQL (limite max 1000)
 app.get('/api/pnjs', async (req, res) => {
@@ -137,18 +241,18 @@ app.get('/api/pnjs', async (req, res) => {
 
     let items = rows.map(r => r.data);
     if (fields) {
-      const pick = new Set(fields.split(',').map(s => s.trim()).filter(Boolean));
-      items = items.map(p => { const out = {}; for (const k of pick) out[k] = p[k]; return out; });
+      const pickSet = new Set(fields.split(',').map(s => s.trim()).filter(Boolean));
+      items = items.map(p => { const out = {}; for (const k of pickSet) out[k] = p[k]; return out; });
     }
 
     res.status(200).json({ total, limit, offset, hasMore: offset + items.length < total, items });
   } catch (e) {
     console.error('GET /api/pnjs error:', e);
-    res.status(200).json({ total: 0, limit, offset, hasMore: false, items: [] });
+    res.status(500).json({ message: 'DB error' });
   }
 });
 
-// 🔄 BULK CREATE / UPSERT (jusqu’à 1000 PNJ)
+// BULK CREATE / UPSERT (jusqu’à 1000 PNJ)
 app.post('/api/pnjs/bulk', async (req, res) => {
   try {
     const items = Array.isArray(req.body?.items) ? req.body.items : null;
@@ -182,7 +286,7 @@ app.post('/api/pnjs/bulk', async (req, res) => {
   }
 });
 
-// Hydratation multiple par ids
+// /pnjs/by-ids
 app.get('/api/pnjs/by-ids', async (req, res) => {
   try {
     const ids = String(req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -193,7 +297,7 @@ app.get('/api/pnjs/by-ids', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
 });
 
-// Compact cards pour prompts
+// compact
 app.get('/api/pnjs/compact', async (req, res) => {
   try {
     const ids = String(req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -203,13 +307,12 @@ app.get('/api/pnjs/compact', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
 });
 
-// Compteur simple
 app.get('/api/pnjs/count', async (req, res) => {
   try { const r = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs'); res.json({ total: r.rows[0].n }); }
   catch (e) { res.status(500).json({ message: 'DB error' }); }
 });
 
-// 🔎 Résolution de nom TOLÉRANTE + SCORING (prénom suffit)
+// resolve name
 app.get('/api/pnjs/resolve', async (req, res) => {
   res.set('Content-Type', 'application/json; charset=utf-8');
   const raw = (req.query.name || '').toString().trim();
@@ -230,7 +333,6 @@ app.get('/api/pnjs/resolve', async (req, res) => {
 
   try {
     let rows = [];
-    // Exact
     try {
       rows = (await pool.query(
         `SELECT data FROM pnjs
@@ -239,7 +341,6 @@ app.get('/api/pnjs/resolve', async (req, res) => {
         [raw]
       )).rows;
     } catch {}
-    // Préfixe
     if (!rows.length) {
       try {
         rows = (await pool.query(
@@ -251,7 +352,6 @@ app.get('/api/pnjs/resolve', async (req, res) => {
         )).rows;
       } catch {}
     }
-    // Tous mots (AND)
     if (!rows.length) {
       const tokens = norm.toLowerCase().split(/\s+/).filter(Boolean);
       if (tokens.length) {
@@ -268,7 +368,6 @@ app.get('/api/pnjs/resolve', async (req, res) => {
         } catch {}
       }
     }
-    // Inclusion large
     if (!rows.length) {
       try {
         rows = (await pool.query(
@@ -307,7 +406,7 @@ app.get('/api/pnjs/resolve', async (req, res) => {
     return res.status(200).json({ matches, exact });
   } catch (e) {
     console.error('GET /api/pnjs/resolve error:', e);
-    return res.status(200).json({ matches: [], exact: false });
+    return res.status(500).json({ matches: [], exact: false, message: 'DB error' });
   }
 });
 
@@ -376,7 +475,7 @@ app.delete('/api/pnjs/:id', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
 });
 
-// DELETE en masse (par ids, DELETE)
+// DELETE en masse (par ids) — méthode DELETE (corps JSON)
 app.delete('/api/pnjs', async (req, res) => {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
@@ -526,7 +625,7 @@ app.post('/api/pnjs/:id/bind-canon', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
 });
 
-// Consistency
+// Consistency PNJ vs canon
 app.get('/api/pnjs/:id/consistency', async (req, res) => {
   try {
     const id = req.params.id;
@@ -567,6 +666,121 @@ app.get('/api/pnjs/:id/consistency', async (req, res) => {
 app.get('/api/pnjs/export', async (req, res) => {
   try { const { rows } = await pool.query('SELECT data FROM pnjs'); res.json(rows.map(r => r.data)); }
   catch (e) { res.status(500).json({ message: 'DB error' }); }
+});
+
+// =================== CANON PROFILES CRUD ===================
+app.get('/api/canon', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT data FROM canon_profiles ORDER BY id');
+    res.json(rows.map(r => r.data));
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+app.post('/api/canon', async (req, res) => {
+  try {
+    const c = req.body || {};
+    c.id = c.id || slugifyId(c.name || ('canon-' + Date.now()));
+    await pool.query(
+      `INSERT INTO canon_profiles (id, data) VALUES ($1, $2::jsonb)
+       ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data`,
+      [c.id, JSON.stringify(c)]
+    );
+    res.status(201).json(c);
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+app.get('/api/canon/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const r = await pool.query('SELECT data FROM canon_profiles WHERE id=$1', [id]);
+    if (!r.rows.length) return res.status(404).json({ message: 'Profil canon non trouvé' });
+    res.json(r.rows[0].data);
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+app.put('/api/canon/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const c = req.body || {};
+    c.id = id;
+    await pool.query(
+      `INSERT INTO canon_profiles (id, data) VALUES ($1, $2::jsonb)
+       ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data`,
+      [id, JSON.stringify(c)]
+    );
+    res.json(c);
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+app.delete('/api/canon/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const r = await pool.query('DELETE FROM canon_profiles WHERE id=$1 RETURNING data', [id]);
+    if (!r.rows.length) return res.status(404).json({ message: 'Profil canon non trouvé' });
+    res.json({ deleted: r.rows[0].data });
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+// =================== APPLY CANON → PNJ ===================
+// Unitaire : applique un profil canon ET/OU un preset franchise à un PNJ
+// body: { canonId?: string, franchise?: 'tensura'|'kumo'|'shieldHero'|'overlord'|'dragonQuest', mode?: 'fill'|'overwrite' }
+app.post('/api/pnjs/:id/apply-canon', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { canonId = null, franchise = null, mode = 'fill' } = req.body || {};
+
+    const pRes = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
+    if (!pRes.rows.length) return res.status(404).json({ message: 'PNJ non trouvé' });
+    const p = pRes.rows[0].data;
+
+    let canonProfile = null;
+    if (canonId) {
+      const cRes = await pool.query('SELECT data FROM canon_profiles WHERE id=$1', [canonId]);
+      if (!cRes.rows.length) return res.status(404).json({ message: 'Profil canon non trouvé' });
+      canonProfile = cRes.rows[0].data;
+    }
+
+    const updated = mergeCanonIntoPnj(p, canonProfile, { mode, franchise });
+    await pool.query('UPDATE pnjs SET data=$2::jsonb WHERE id=$1', [id, JSON.stringify(updated)]);
+    res.json(updated);
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+// Bulk : applique un preset franchise (optionnel canonId par item)
+// body: { items: [{ id, canonId? }], franchise?: '...', mode?: 'fill'|'overwrite' }
+app.post('/api/pnjs/apply-canon-bulk', async (req, res) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    const franchise = req.body?.franchise || null;
+    const mode = req.body?.mode === 'overwrite' ? 'overwrite' : 'fill';
+    if (!items.length) return res.status(400).json({ message: 'items[] requis' });
+    if (items.length > 1000) return res.status(400).json({ message: 'Trop d’items (max 1000).' });
+
+    await pool.query('BEGIN');
+    const results = [];
+    for (const it of items) {
+      const id = String(it?.id || '');
+      if (!id) continue;
+      const pRes = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
+      if (!pRes.rows.length) { results.push({ id, status: 'not_found' }); continue; }
+
+      let canonProfile = null;
+      if (it?.canonId) {
+        const cRes = await pool.query('SELECT data FROM canon_profiles WHERE id=$1', [String(it.canonId)]);
+        if (cRes.rows.length) canonProfile = cRes.rows[0].data;
+      }
+
+      const merged = mergeCanonIntoPnj(pRes.rows[0].data, canonProfile, { mode, franchise });
+      await pool.query('UPDATE pnjs SET data=$2::jsonb WHERE id=$1', [id, JSON.stringify(merged)]);
+      results.push({ id, status: 'ok' });
+    }
+    await pool.query('COMMIT');
+    res.json({ ok: true, updated: results });
+  } catch (e) {
+    console.error(e);
+    try { await pool.query('ROLLBACK'); } catch {}
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // =================== RACES (CRUD fichier JSON) ====================
@@ -639,17 +853,14 @@ function continuityDossier(p) {
 
 // ===== ENGINE PRELOAD (chargement paginé des PNJ pour GPT & scripts) =====
 app.post('/api/engine/preload', async (req, res) => {
-  // body: { sid?: string, limit?: number, cursor?: number, fields?: string }
-  const limit = Math.max(1, Math.min(parseInt(req.body?.limit ?? '100', 10), 200)); // autorise 200 max
+  const limit = Math.max(1, Math.min(parseInt(req.body?.limit ?? '100', 10), 200));
   const cursor = Math.max(0, parseInt(req.body?.cursor ?? '0', 10));
   const fields = (req.body?.fields || '').toString().trim();
 
   try {
-    // total
     const totalRes = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs');
     const total = totalRes.rows[0].n;
 
-    // page
     const { rows } = await pool.query(
       `SELECT data FROM pnjs
        ORDER BY (data->>'name') NULLS LAST, id
@@ -659,13 +870,12 @@ app.post('/api/engine/preload', async (req, res) => {
 
     let items = rows.map(r => r.data);
     if (fields) {
-      const pick = new Set(fields.split(',').map(s => s.trim()).filter(Boolean));
-      items = items.map(p => { const out = {}; for (const k of pick) out[k] = p[k]; return out; });
+      const pickSet = new Set(fields.split(',').map(s => s.trim()).filter(Boolean));
+      items = items.map(p => { const out = {}; for (const k of pickSet) out[k] = p[k]; return out; });
     }
 
     const nextCursor = (cursor + items.length < total) ? cursor + items.length : null;
 
-    // Alimente la continuité de session (ancres)
     const sid = String(req.body?.sid || 'default');
     const sess = await getOrInitSession(sid);
     sess.data.dossiersById = sess.data.dossiersById || {};
@@ -687,13 +897,13 @@ app.post('/api/engine/pin', async (req, res) => {
     const sid = String(req.body?.sid || 'default');
     const pnjIds = Array.isArray(req.body?.pnjIds) ? req.body.pnjIds.map(String) : [];
     const sess = await getOrInitSession(sid);
-    sess.data.pinRoster = pnjIds.slice(0, 8); // on épingle 8 PNJ max
+    sess.data.pinRoster = pnjIds.slice(0, 8);
     await saveSession(sid, sess.data);
     res.json({ ok: true, pinRoster: sess.data.pinRoster });
   } catch (e) { console.error(e); res.status(500).json({ message: 'engine/pin error' }); }
 });
 
-// Recharge les PNJ épinglés et reconstruit des cartes compactes à la demande
+// Recharge les PNJ épinglés
 app.post('/api/engine/refresh', async (req, res) => {
   try {
     const sid = String(req.body?.sid || 'default');
@@ -701,7 +911,6 @@ app.post('/api/engine/refresh', async (req, res) => {
     const ids = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
     const pnjs = await loadPnjsByIds(ids);
     const pnjCards = pnjs.map(compactCard);
-    // Met à jour les dossiers d’ancrage
     sess.data.dossiersById = sess.data.dossiersById || {};
     for (const p of pnjs) sess.data.dossiersById[p.id] = continuityDossier(p);
     await saveSession(sid, sess.data);
@@ -709,16 +918,7 @@ app.post('/api/engine/refresh', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ message: 'engine/refresh error' }); }
 });
 
-// -------- CONTEXT: prépare le tour de jeu --------
-/* Body accepté :
-{
-  "sid": "session-123",
-  "userText": "Kael parle à Araniel...",
-  "pnjIds": ["1758006092821"],
-  "pnjNames": ["Milim Nava"],       // ou
-  "name": "Milim Nava"              // équiv à pnjNames:[name]
-}
-*/
+// CONTEXT: prépare le tour de jeu
 app.post('/api/engine/context', async (req, res) => {
   let sid = 'default';
   try {
@@ -733,7 +933,7 @@ app.post('/api/engine/context', async (req, res) => {
     const lastHashes = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies.slice(-3) : [];
     const token = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
-    // ==== Mode normal (résolution par ids ou noms) ====
+    // Résolution normale
     let pnjs = [];
     if (pnjIds.length) {
       pnjs = await loadPnjsByIds(pnjIds);
@@ -806,27 +1006,25 @@ app.post('/api/engine/context', async (req, res) => {
       pnjs = rows.map(r => r.data);
     }
 
-    // --- POINT 3 : réhydratation, épinglage, mémo (dans /api/engine/context) ---
-    // 3.1) Si on n’a rien trouvé mais qu’un roster est épinglé → recharge
+    // Réhydratation si rien + roster épinglé
     if (!pnjs.length) {
       const pinned = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
       if (pinned.length) {
         pnjs = await loadPnjsByIds(pinned);
       }
     }
-    // 3.2) Si des ids sont fournis → on met à jour le pinRoster
+    // Si ids fournis → maj pinRoster
     const providedIds = Array.isArray(body.pnjIds) ? body.pnjIds.map(String) : [];
     if (providedIds.length) {
       sess.data.pinRoster = providedIds.slice(0, 8);
       await saveSession(sid, sess.data);
     }
-    // 3.3) Mémo des derniers résumés
+    // mémo
     const lastNotes = Array.isArray(sess.data.notes) ? sess.data.notes.slice(-5) : [];
     const memo = lastNotes.length
       ? `\nMEMO (résumés précédents):\n- ${lastNotes.join('\n- ')}\n`
       : '';
 
-    // Fiches compactes & ancres
     const pnjCards = pnjs.slice(0, 8).map(compactCard);
     sess.data.dossiersById = sess.data.dossiersById || {};
     for (const p of pnjs.slice(0, 8)) {
@@ -892,14 +1090,14 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
     });
   } catch (e) {
     console.error('engine/context error:', e);
-    return res.status(200).json({
+    return res.status(500).json({
       guard: { antiLoop: { token: null, lastHashes: [] }, rules: '', style: '' },
       pnjCards: [], dossiers: [], systemHint: '', turn: 0, error: 'engine/context error'
     });
   }
 });
 
-// -------- COMMIT: enregistre ce qui s'est passé --------
+// COMMIT
 app.post('/api/engine/commit', async (req, res) => {
   try {
     const { sid, modelReply, notes, pnjUpdates, lock } = req.body || {};
@@ -948,7 +1146,7 @@ app.post('/api/engine/commit', async (req, res) => {
   } catch (e) { console.error(e); res.status(500).json({ message: 'engine/commit error' }); }
 });
 
-// =================== STYLE & CONTENT SETTINGS ====================
+// =================== STYLE & CONTENT SETTINGS ===================
 app.post('/api/style', (req, res) => {
   narrativeStyle = req.body || { styleText: '' };
   res.json({ message: 'Style mis à jour.' });
@@ -960,7 +1158,7 @@ app.post('/api/settings/content', (req, res) => {
   res.json({ explicitLevel: contentSettings.explicitLevel });
 });
 
-// =================== ROLL (dés) ====================
+// =================== ROLL (dés) ===================
 app.post('/api/roll', (req, res) => {
   const { dice } = req.body || {};
   const p = parseDiceFormula(dice);
@@ -970,10 +1168,71 @@ app.post('/api/roll', (req, res) => {
   res.json({ result: total, rolls, modifier: p.modifier, formula: dice });
 });
 
-// =================== HEALTH ====================
+// =================== HEALTH ===================
 app.get('/api/db/health', async (req, res) => {
   try { await pool.query('SELECT 1'); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ ok: false, error: 'DB error' }); }
+});
+
+// =================== BACKUPS ===================
+// Snapshot complet (pnjs, canon, races, sessions) – à télécharger côté client
+app.get('/api/backup/snapshot', async (req, res) => {
+  try {
+    const pnjs = (await pool.query('SELECT data FROM pnjs')).rows.map(r => r.data);
+    const canon = (await pool.query('SELECT data FROM canon_profiles')).rows.map(r => r.data);
+    const sessions = (await pool.query('SELECT id, data FROM sessions')).rows.map(r => ({ id: r.id, data: r.data }));
+    res.json({ pnjs, canon, races, sessions, generatedAt: new Date().toISOString() });
+  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+});
+
+// Restore (upsert) – body: { pnjs?:[], canon?:[], races?:[], sessions?:[] }
+app.post('/api/backup/restore', async (req, res) => {
+  try {
+    const { pnjs = [], canon = [], races: inRaces = null, sessions = [] } = req.body || {};
+    await pool.query('BEGIN');
+    if (Array.isArray(pnjs)) {
+      for (const p of pnjs) {
+        const id = String(p.id || Date.now().toString() + Math.random().toString(36).slice(2,6));
+        await pool.query(
+          `INSERT INTO pnjs (id, data) VALUES ($1,$2::jsonb)
+           ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data`,
+          [id, JSON.stringify({ ...p, id })]
+        );
+      }
+    }
+    if (Array.isArray(canon)) {
+      for (const c of canon) {
+        const id = String(c.id || slugifyId(c.name || ('canon-' + Date.now())));
+        await pool.query(
+          `INSERT INTO canon_profiles (id, data) VALUES ($1,$2::jsonb)
+           ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data`,
+          [id, JSON.stringify({ ...c, id })]
+        );
+      }
+    }
+    if (Array.isArray(sessions)) {
+      for (const s of sessions) {
+        const id = String(s.id || 'default');
+        const data = s.data || {};
+        await pool.query(
+          `INSERT INTO sessions (id, data) VALUES ($1,$2::jsonb)
+           ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data`,
+          [id, JSON.stringify(data)]
+        );
+      }
+    }
+    if (inRaces && Array.isArray(inRaces)) {
+      // surcharge races.json (FS éphémère en prod — à récupérer via snapshot quand même)
+      races = inRaces;
+      saveRaces();
+    }
+    await pool.query('COMMIT');
+    res.json({ ok: true, counts: { pnjs: pnjs.length, canon: canon.length, sessions: sessions.length, races: Array.isArray(inRaces) ? inRaces.length : undefined } });
+  } catch (e) {
+    console.error(e);
+    try { await pool.query('ROLLBACK'); } catch {}
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // ---------------- Lancement ----------------
