@@ -18,9 +18,9 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('localhost')
     ? false
     : { rejectUnauthorized: false },
-  max: 5,                 // Limite à 5 connexions simultanées (pour Neon)
-  idleTimeoutMillis: 30000,      // Ferme les connexions inactives après 30s
-  connectionTimeoutMillis: 10000 // Timeout si Neon met trop de temps à répondre
+  max: 5,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000
 });
 
 // ---------- Init tables ----------
@@ -114,7 +114,6 @@ function pick(obj, fieldsCsv) {
 }
 
 // ======================= BIBLIOTHÈQUE CANON (stats & skills) =======================
-// ⚠️ Exemples condensés/raisonnables pour tenir en taille — libre à toi d’enrichir.
 const CANON_LIB = {
   tensura: {
     meta: { label: "That Time I Got Reincarnated as a Slime (Tensura)" },
@@ -174,7 +173,6 @@ function mergeCanonIntoPnj(p, canonProfile, opts = { mode: 'fill', franchise: nu
   const mode = opts.mode === 'overwrite' ? 'overwrite' : 'fill';
   const out = clone(p);
 
-  // 1) Applique profil canon (table canon_profiles) : appearance, traits, skills, backstory…
   if (canonProfile) {
     const c = canonProfile;
     for (const key of ['appearance','personalityTraits','skills','backstory','raceId','raceName','description']) {
@@ -184,7 +182,6 @@ function mergeCanonIntoPnj(p, canonProfile, opts = { mode: 'fill', franchise: nu
     }
   }
 
-  // 2) Applique preset franchise (stats + compétences) si demandé
   if (opts.franchise && CANON_LIB[opts.franchise]) {
     const preset = CANON_LIB[opts.franchise];
     out.stats = out.stats || {};
@@ -192,7 +189,6 @@ function mergeCanonIntoPnj(p, canonProfile, opts = { mode: 'fill', franchise: nu
     for (const k of statKeys) {
       if (mode === 'overwrite' || out.stats[k] == null) out.stats[k] = preset.baseStats[k];
     }
-    // fusion compétences
     const existing = new Set((out.skills || []).map(s => s.name));
     const mergedSkills = Array.isArray(out.skills) ? clone(out.skills) : [];
     for (const s of preset.skills || []) {
@@ -201,7 +197,6 @@ function mergeCanonIntoPnj(p, canonProfile, opts = { mode: 'fill', franchise: nu
     out.skills = mergedSkills;
   }
 
-  // 3) Valeurs par défaut
   out.level = Number.isFinite(out.level) ? out.level : 1;
   out.xp = Number.isFinite(out.xp) ? out.xp : 0;
   out.stats = out.stats || { hp: 100, mp: 50, strength: 10, defense: 10, magic: 10, speed: 10, resistance: 10, charisma: 10 };
@@ -210,7 +205,8 @@ function mergeCanonIntoPnj(p, canonProfile, opts = { mode: 'fill', franchise: nu
 }
 
 // =================== PNJ (PostgreSQL) ====================
-// LISTE paginée + projection + filtre SQL (limite max 1000)
+
+// LISTE paginée + projection + filtre SQL
 app.get('/api/pnjs', async (req, res) => {
   res.set('Content-Type', 'application/json; charset=utf-8');
   const limitMax = 1000;
@@ -235,7 +231,10 @@ app.get('/api/pnjs', async (req, res) => {
 
     const params = [limit, offset];
     let where = '';
-    if (q) { params.push(`%${q}%`, `%${q}%`); where = `WHERE lower(data->>'name') LIKE lower($3) OR lower(data->>'description') LIKE lower($4)`; }
+    if (q) {
+      params.push(`%${q}%`, `%${q}%`);
+      where = `WHERE lower(data->>'name') LIKE lower($3) OR lower(data->>'description') LIKE lower($4)`;
+    }
 
     const { rows } = await pool.query(
       `SELECT data FROM pnjs ${where} ORDER BY (data->>'name') NULLS LAST, id LIMIT $1 OFFSET $2`,
@@ -255,7 +254,7 @@ app.get('/api/pnjs', async (req, res) => {
   }
 });
 
-// BULK CREATE / UPSERT (jusqu’à 1000 PNJ)
+// BULK CREATE / UPSERT
 app.post('/api/pnjs/bulk', async (req, res) => {
   try {
     const items = Array.isArray(req.body?.items) ? req.body.items : null;
@@ -311,8 +310,10 @@ app.get('/api/pnjs/compact', async (req, res) => {
 });
 
 app.get('/api/pnjs/count', async (req, res) => {
-  try { const r = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs'); res.json({ total: r.rows[0].n }); }
-  catch (e) { res.status(500).json({ message: 'DB error' }); }
+  try {
+    const r = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs');
+    res.json({ total: r.rows[0].n });
+  } catch (e) { res.status(500).json({ message: 'DB error' }); }
 });
 
 // resolve name
@@ -420,7 +421,10 @@ app.get('/api/pnjs/:id', async (req, res) => {
     const r = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
     if (!r.rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
     res.json(r.rows[0].data);
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // CREATE (upsert)
@@ -431,9 +435,15 @@ app.post('/api/pnjs', async (req, res) => {
     if (!p.level) p.level = 1;
     if (!Number.isFinite(p.xp)) p.xp = 0;
     p.stats = p.stats || {};
-    await pool.query('INSERT INTO pnjs (id, data) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data', [p.id, JSON.stringify(p)]);
+    await pool.query(
+      'INSERT INTO pnjs (id, data) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data',
+      [p.id, JSON.stringify(p)]
+    );
     res.status(201).json(p);
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // PATCH (deep merge, respecte lockedTraits)
@@ -447,9 +457,15 @@ app.patch('/api/pnjs/:id', async (req, res) => {
     const locks = new Set(current.lockedTraits || []);
     for (const f of locks) if (f in incoming) delete incoming[f];
     const merged = deepMerge(current, incoming);
-    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
+    await pool.query(
+      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
+      [id, JSON.stringify(merged)]
+    );
     res.json(merged);
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // PUT (shallow merge, respecte lockedTraits)
@@ -463,9 +479,15 @@ app.put('/api/pnjs/:id', async (req, res) => {
     const locks = new Set(current.lockedTraits || []);
     for (const f of locks) if (f in incoming) delete incoming[f];
     const merged = { ...current, ...incoming, id };
-    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
+    await pool.query(
+      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
+      [id, JSON.stringify(merged)]
+    );
     res.json(merged);
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // DELETE unitaire
@@ -475,17 +497,23 @@ app.delete('/api/pnjs/:id', async (req, res) => {
     const r = await pool.query('DELETE FROM pnjs WHERE id = $1 RETURNING data', [id]);
     if (!r.rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
     res.json({ deleted: r.rows[0].data });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
-// DELETE en masse (par ids) — méthode DELETE (corps JSON)
+// DELETE en masse (par ids)
 app.delete('/api/pnjs', async (req, res) => {
   try {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
     if (!ids.length) return res.status(400).json({ message: 'ids[] requis' });
     await pool.query('DELETE FROM pnjs WHERE id = ANY($1::text[])', [ids]);
     res.json({ deletedIds: ids });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // POST safe — suppression unitaire par body {id}
@@ -496,7 +524,10 @@ app.post('/api/pnjs/delete', async (req, res) => {
     const r = await pool.query('DELETE FROM pnjs WHERE id = $1 RETURNING data', [id]);
     if (!r.rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
     res.json({ deleted: r.rows[0].data });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // POST safe — suppression multiple par body {ids: []}
@@ -506,7 +537,10 @@ app.post('/api/pnjs/bulk-delete', async (req, res) => {
     if (!ids.length) return res.status(400).json({ message: 'ids[] requis' });
     await pool.query('DELETE FROM pnjs WHERE id = ANY($1::text[])', [ids]);
     res.json({ deletedIds: ids });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // XP
@@ -517,10 +551,17 @@ app.post('/api/pnjs/:id/award-xp', async (req, res) => {
     const id = req.params.id;
     const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
     if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
-    const p = rows[0].data; p.xp = (p.xp || 0) + xp;
-    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(p)]);
+    const p = rows[0].data;
+    p.xp = (p.xp || 0) + xp;
+    await pool.query(
+      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
+      [id, JSON.stringify(p)]
+    );
     res.json(p);
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // Level-up
@@ -532,27 +573,50 @@ app.post('/api/pnjs/:id/level-up', async (req, res) => {
     const p = rows[0].data;
     p.level = p.level || 1;
     p.xp = p.xp || 0;
-    p.stats = p.stats || { hp: 100, mp: 50, strength: 10, defense: 10, magic: 10, speed: 10, resistance: 10, charisma: 10 };
+    p.stats = p.stats || {
+      hp: 100, mp: 50, strength: 10, defense: 10, magic: 10,
+      speed: 10, resistance: 10, charisma: 10
+    };
 
     let oldLevel = p.level;
-    let statIncreases = { hp: 0, mp: 0, strength: 0, defense: 0, magic: 0, speed: 0, resistance: 0, charisma: 0 };
+    let statIncreases = {
+      hp: 0, mp: 0, strength: 0, defense: 0,
+      magic: 0, speed: 0, resistance: 0, charisma: 0
+    };
+
     const xpThreshold = lvl => 100 * lvl;
     while (p.xp >= xpThreshold(p.level)) {
       p.xp -= xpThreshold(p.level);
       p.level += 1;
-      p.stats.hp += 5; statIncreases.hp += 5;
-      p.stats.mp += 5; statIncreases.mp += 5;
-      p.stats.strength += 1; statIncreases.strength += 1;
-      p.stats.defense += 1; statIncreases.defense += 1;
-      p.stats.magic += 1; statIncreases.magic += 1;
-      p.stats.speed += 1; statIncreases.speed += 1;
-      p.stats.resistance += 1; statIncreases.resistance += 1;
-      p.stats.charisma += 1; statIncreases.charisma += 1;
-      if (p.level - oldLevel > 50) break;
+
+      p.stats.hp += 5;           statIncreases.hp += 5;
+      p.stats.mp += 5;           statIncreases.mp += 5;
+      p.stats.strength += 1;     statIncreases.strength += 1;
+      p.stats.defense += 1;      statIncreases.defense += 1;
+      p.stats.magic += 1;        statIncreases.magic += 1;
+      p.stats.speed += 1;        statIncreases.speed += 1;
+      p.stats.resistance += 1;   statIncreases.resistance += 1;
+      p.stats.charisma += 1;     statIncreases.charisma += 1;
+
+      if (p.level - oldLevel > 50) break; // sécurité anti-boucle
     }
-    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(p)]);
-    res.json({ oldLevel, newLevel: p.level, xp: p.xp, xpToNext: Math.max(0, 100 * p.level - p.xp), statIncreases });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+
+    await pool.query(
+      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
+      [id, JSON.stringify(p)]
+    );
+
+    res.json({
+      oldLevel,
+      newLevel: p.level,
+      xp: p.xp,
+      xpToNext: Math.max(0, 100 * p.level - p.xp),
+      statIncreases
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // Evolve
@@ -583,12 +647,20 @@ app.post('/api/pnjs/:id/evolve', async (req, res) => {
     }
     if (!ok) return res.status(400).json({ message: 'Conditions d’évolution non remplies' });
 
-    p.raceId = targetRace.id; p.raceName = targetRace.name;
+    p.raceId = targetRace.id;
+    p.raceName = targetRace.name;
     p.evolutionHistory.push(`${currentRace ? currentRace.id : 'unknown'} -> ${targetRace.id}`);
 
-    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(p)]);
+    await pool.query(
+      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
+      [id, JSON.stringify(p)]
+    );
+
     res.json(p);
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // Lock traits
@@ -601,19 +673,28 @@ app.post('/api/pnjs/:id/lock-traits', async (req, res) => {
     const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
     if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé' });
 
-    const p = rows[0].data; const set = new Set(p.lockedTraits || []);
+    const p = rows[0].data;
+    const set = new Set(p.lockedTraits || []);
     for (const f of fields) set.add(String(f));
     p.lockedTraits = Array.from(set);
 
-    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(p)]);
+    await pool.query(
+      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
+      [id, JSON.stringify(p)]
+    );
+
     res.json(p);
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // Bind canon
 app.post('/api/pnjs/:id/bind-canon', async (req, res) => {
   try {
-    const id = req.params.id; const canonId = String(req.body?.canonId || '');
+    const id = req.params.id;
+    const canonId = String(req.body?.canonId || '');
     if (!canonId) return res.status(400).json({ message: 'canonId requis' });
 
     const pRes = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
@@ -622,10 +703,19 @@ app.post('/api/pnjs/:id/bind-canon', async (req, res) => {
     const cRes = await pool.query('SELECT data FROM canon_profiles WHERE id = $1', [canonId]);
     if (!cRes.rows.length) return res.status(404).json({ message: 'Profil canon non trouvé' });
 
-    const p = pRes.rows[0].data; p.canonId = canonId;
-    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(p)]);
+    const p = pRes.rows[0].data;
+    p.canonId = canonId;
+
+    await pool.query(
+      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
+      [id, JSON.stringify(p)]
+    );
+
     res.json(p);
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // Consistency PNJ vs canon
@@ -636,39 +726,86 @@ app.get('/api/pnjs/:id/consistency', async (req, res) => {
     if (!pRes.rows.length) return res.status(404).json({ message: 'PNJ non trouvé' });
     const p = pRes.rows[0].data;
 
-    if (!p.canonId) return res.json({ passed: true, conflicts: [], suggestions: ['Aucun canon lié.'] });
+    if (!p.canonId) {
+      return res.json({
+        passed: true,
+        conflicts: [],
+        suggestions: ['Aucun canon lié.']
+      });
+    }
 
     const cRes = await pool.query('SELECT data FROM canon_profiles WHERE id = $1', [p.canonId]);
     if (!cRes.rows.length) {
       return res.json({
         passed: false,
-        conflicts: [{ field: 'canonId', expected: 'Profil existant', found: 'introuvable', severity: 'high' }],
+        conflicts: [{
+          field: 'canonId',
+          expected: 'Profil existant',
+          found: 'introuvable',
+          severity: 'high'
+        }],
         suggestions: ['Vérifier canonId']
       });
     }
 
-    const c = cRes.rows[0].data; const conflicts = [];
+    const c = cRes.rows[0].data;
+    const conflicts = [];
+
     if (c.appearance && p.appearance && c.appearance !== p.appearance) {
-      conflicts.push({ field: 'appearance', expected: c.appearance, found: p.appearance, severity: 'medium' });
+      conflicts.push({
+        field: 'appearance',
+        expected: c.appearance,
+        found: p.appearance,
+        severity: 'medium'
+      });
     }
+
     if (Array.isArray(c.personalityTraits) && Array.isArray(p.personalityTraits)) {
       const missing = c.personalityTraits.filter(t => !p.personalityTraits.includes(t));
-      if (missing.length) conflicts.push({ field: 'personalityTraits', expected: c.personalityTraits.join(', '), found: p.personalityTraits.join(', '), severity: 'low' });
+      if (missing.length) {
+        conflicts.push({
+          field: 'personalityTraits',
+          expected: c.personalityTraits.join(', '),
+          found: p.personalityTraits.join(', '),
+          severity: 'low'
+        });
+      }
     }
+
     if (Array.isArray(c.skills) && Array.isArray(p.skills)) {
       const cSkillNames = new Set(c.skills.map(s => s.name));
       const pSkillNames = new Set(p.skills.map(s => s.name));
-      for (const s of cSkillNames) if (!pSkillNames.has(s)) conflicts.push({ field: 'skills', expected: `inclure ${s}`, found: 'absent', severity: 'low' });
+      for (const s of cSkillNames) {
+        if (!pSkillNames.has(s)) {
+          conflicts.push({
+            field: 'skills',
+            expected: `inclure ${s}`,
+            found: 'absent',
+            severity: 'low'
+          });
+        }
+      }
     }
 
-    res.json({ passed: conflicts.length === 0, conflicts, suggestions: [] });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+    res.json({
+      passed: conflicts.length === 0,
+      conflicts,
+      suggestions: []
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // Export JSON
 app.get('/api/pnjs/export', async (req, res) => {
-  try { const { rows } = await pool.query('SELECT data FROM pnjs'); res.json(rows.map(r => r.data)); }
-  catch (e) { res.status(500).json({ message: 'DB error' }); }
+  try {
+    const { rows } = await pool.query('SELECT data FROM pnjs');
+    res.json(rows.map(r => r.data));
+  } catch (e) {
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // =================== CANON PROFILES CRUD ===================
@@ -676,7 +813,10 @@ app.get('/api/canon', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT data FROM canon_profiles ORDER BY id');
     res.json(rows.map(r => r.data));
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 app.post('/api/canon', async (req, res) => {
@@ -689,7 +829,10 @@ app.post('/api/canon', async (req, res) => {
       [c.id, JSON.stringify(c)]
     );
     res.status(201).json(c);
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 app.get('/api/canon/:id', async (req, res) => {
@@ -698,7 +841,10 @@ app.get('/api/canon/:id', async (req, res) => {
     const r = await pool.query('SELECT data FROM canon_profiles WHERE id=$1', [id]);
     if (!r.rows.length) return res.status(404).json({ message: 'Profil canon non trouvé' });
     res.json(r.rows[0].data);
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 app.put('/api/canon/:id', async (req, res) => {
@@ -712,7 +858,10 @@ app.put('/api/canon/:id', async (req, res) => {
       [id, JSON.stringify(c)]
     );
     res.json(c);
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 app.delete('/api/canon/:id', async (req, res) => {
@@ -721,12 +870,13 @@ app.delete('/api/canon/:id', async (req, res) => {
     const r = await pool.query('DELETE FROM canon_profiles WHERE id=$1 RETURNING data', [id]);
     if (!r.rows.length) return res.status(404).json({ message: 'Profil canon non trouvé' });
     res.json({ deleted: r.rows[0].data });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
 // =================== APPLY CANON → PNJ ===================
-// Unitaire : applique un profil canon ET/OU un preset franchise à un PNJ
-// body: { canonId?: string, franchise?: 'tensura'|'kumo'|'shieldHero'|'overlord'|'dragonQuest', mode?: 'fill'|'overwrite' }
 app.post('/api/pnjs/:id/apply-canon', async (req, res) => {
   try {
     const id = req.params.id;
@@ -744,13 +894,19 @@ app.post('/api/pnjs/:id/apply-canon', async (req, res) => {
     }
 
     const updated = mergeCanonIntoPnj(p, canonProfile, { mode, franchise });
-    await pool.query('UPDATE pnjs SET data=$2::jsonb WHERE id=$1', [id, JSON.stringify(updated)]);
+    await pool.query(
+      'UPDATE pnjs SET data=$2::jsonb WHERE id=$1',
+      [id, JSON.stringify(updated)]
+    );
+
     res.json(updated);
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
-// Bulk : applique un preset franchise (optionnel canonId par item)
-// body: { items: [{ id, canonId? }], franchise?: '...', mode?: 'fill'|'overwrite' }
+// Bulk apply canon
 app.post('/api/pnjs/apply-canon-bulk', async (req, res) => {
   try {
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
@@ -774,10 +930,14 @@ app.post('/api/pnjs/apply-canon-bulk', async (req, res) => {
       }
 
       const merged = mergeCanonIntoPnj(pRes.rows[0].data, canonProfile, { mode, franchise });
-      await pool.query('UPDATE pnjs SET data=$2::jsonb WHERE id=$1', [id, JSON.stringify(merged)]);
+      await pool.query(
+        'UPDATE pnjs SET data=$2::jsonb WHERE id=$1',
+        [id, JSON.stringify(merged)]
+      );
       results.push({ id, status: 'ok' });
     }
     await pool.query('COMMIT');
+
     res.json({ ok: true, updated: results });
   } catch (e) {
     console.error(e);
@@ -788,21 +948,46 @@ app.post('/api/pnjs/apply-canon-bulk', async (req, res) => {
 
 // =================== RACES (CRUD fichier JSON) ====================
 app.get('/api/races', (req, res) => res.json(races));
-app.get('/api/races/:id', (req, res) => { const race = races.find(r => r.id === req.params.id); if (!race) return res.status(404).json({ message: 'Race non trouvée' }); res.json(race); });
+
+app.get('/api/races/:id', (req, res) => {
+  const race = races.find(r => r.id === req.params.id);
+  if (!race) return res.status(404).json({ message: 'Race non trouvée' });
+  res.json(race);
+});
+
 app.post('/api/races', (req, res) => {
   const race = req.body || {};
   if (!race.name) return res.status(400).json({ message: 'name requis' });
   if (!race.id) race.id = slugifyId(race.name);
   if (races.some(r => r.id === race.id)) return res.status(409).json({ message: 'id déjà utilisé' });
-  race.family = race.family || 'custom'; race.canon = race.canon ?? false; race.baseStats = race.baseStats || {}; race.evolutionPaths = race.evolutionPaths || [];
-  races.push(race); saveRaces(); res.status(201).json(race);
+
+  race.family = race.family || 'custom';
+  race.canon = race.canon ?? false;
+  race.baseStats = race.baseStats || {};
+  race.evolutionPaths = race.evolutionPaths || [];
+
+  races.push(race);
+  saveRaces();
+  res.status(201).json(race);
 });
-app.delete('/api/races/:id', (req, res) => { const i = races.findIndex(r => r.id === req.params.id); if (i === -1) return res.status(404).json({ message: 'Race non trouvée' }); const removed = races.splice(i, 1)[0]; saveRaces(); res.json(removed); });
+
+app.delete('/api/races/:id', (req, res) => {
+  const i = races.findIndex(r => r.id === req.params.id);
+  if (i === -1) return res.status(404).json({ message: 'Race non trouvée' });
+  const removed = races.splice(i, 1)[0];
+  saveRaces();
+  res.json(removed);
+});
 
 // =================== SESSIONS & CONTEXTE ====================
 
-// == Sessions helpers ==
-function fingerprint(text = '') { const s = String(text).toLowerCase().replace(/\s+/g,' ').slice(0, 500); let h = 0; for (let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i))|0; return String(h >>> 0); }
+function fingerprint(text = '') {
+  const s = String(text).toLowerCase().replace(/\s+/g,' ').slice(0, 500);
+  let h = 0;
+  for (let i=0;i<s.length;i++) h = (h*31 + s.charCodeAt(i))|0;
+  return String(h >>> 0);
+}
+
 async function getOrInitSession(sid) {
   const s = String(sid || '').trim();
   if (!s) return { id: 'default', data: { lastReplies: [], notes: [], dossiersById: {}, turn: 0 } };
@@ -816,8 +1001,13 @@ async function getOrInitSession(sid) {
   if (!data.dossiersById) data.dossiersById = {};
   return { id: s, data };
 }
+
 async function saveSession(sid, data) {
-  await pool.query(`INSERT INTO sessions (id, data) VALUES ($1,$2::jsonb) ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data`, [sid, JSON.stringify(data)]);
+  await pool.query(
+    `INSERT INTO sessions (id, data) VALUES ($1,$2::jsonb)
+     ON CONFLICT (id) DO UPDATE SET data=EXCLUDED.data`,
+    [sid, JSON.stringify(data)]
+  );
 }
 
 async function loadPnjsByIds(ids = []) {
@@ -842,19 +1032,22 @@ function compactCard(p) {
     lockedTraits: p.lockedTraits
   };
 }
+
 function continuityDossier(p) {
   return {
     id: p.id,
     name: p.name,
     coreFacts: [
       p.raceName || p.raceId ? `Race: ${p.raceName || p.raceId}` : null,
-      Array.isArray(p.personalityTraits) && p.personalityTraits.length ? `Traits: ${p.personalityTraits.slice(0,5).join(', ')}` : null,
+      Array.isArray(p.personalityTraits) && p.personalityTraits.length
+        ? `Traits: ${p.personalityTraits.slice(0,5).join(', ')}`
+        : null,
       p.locationId ? `Loc: ${p.locationId}` : null
     ].filter(Boolean)
   };
 }
 
-// ===== ENGINE PRELOAD (chargement paginé des PNJ pour GPT & scripts) =====
+// ENGINE PRELOAD
 app.post('/api/engine/preload', async (req, res) => {
   const limit = Math.max(1, Math.min(parseInt(req.body?.limit ?? '100', 10), 200));
   const cursor = Math.max(0, parseInt(req.body?.cursor ?? '0', 10));
@@ -894,7 +1087,7 @@ app.post('/api/engine/preload', async (req, res) => {
   }
 });
 
-// --- PIN / REFRESH DE CONTEXTE ---
+// PIN roster
 app.post('/api/engine/pin', async (req, res) => {
   try {
     const sid = String(req.body?.sid || 'default');
@@ -903,10 +1096,13 @@ app.post('/api/engine/pin', async (req, res) => {
     sess.data.pinRoster = pnjIds.slice(0, 8);
     await saveSession(sid, sess.data);
     res.json({ ok: true, pinRoster: sess.data.pinRoster });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'engine/pin error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'engine/pin error' });
+  }
 });
 
-// Recharge les PNJ épinglés
+// Refresh roster épinglé
 app.post('/api/engine/refresh', async (req, res) => {
   try {
     const sid = String(req.body?.sid || 'default');
@@ -914,14 +1110,25 @@ app.post('/api/engine/refresh', async (req, res) => {
     const ids = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
     const pnjs = await loadPnjsByIds(ids);
     const pnjCards = pnjs.map(compactCard);
+
     sess.data.dossiersById = sess.data.dossiersById || {};
-    for (const p of pnjs) sess.data.dossiersById[p.id] = continuityDossier(p);
+    for (const p of pnjs) {
+      sess.data.dossiersById[p.id] = continuityDossier(p);
+    }
     await saveSession(sid, sess.data);
-    res.json({ ok: true, pnjCards, dossiers: ids.map(id => sess.data.dossiersById[id]).filter(Boolean) });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'engine/refresh error' }); }
+
+    res.json({
+      ok: true,
+      pnjCards,
+      dossiers: ids.map(id => sess.data.dossiersById[id]).filter(Boolean)
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'engine/refresh error' });
+  }
 });
 
-// CONTEXT: prépare le tour de jeu
+// CONTEXT (tour de jeu)
 app.post('/api/engine/context', async (req, res) => {
   let sid = 'default';
   try {
@@ -936,7 +1143,7 @@ app.post('/api/engine/context', async (req, res) => {
     const lastHashes = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies.slice(-3) : [];
     const token = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
-    // Résolution normale
+    // Résolution PNJ par ids, noms, ou détection auto
     let pnjs = [];
     if (pnjIds.length) {
       pnjs = await loadPnjsByIds(pnjIds);
@@ -945,11 +1152,22 @@ app.post('/api/engine/context', async (req, res) => {
       if (raw) {
         let rows = [];
         try {
-          rows = (await pool.query(`SELECT data FROM pnjs WHERE trim(lower(data->>'name')) = trim(lower($1)) LIMIT 1`, [raw])).rows;
+          rows = (await pool.query(
+            `SELECT data FROM pnjs
+             WHERE trim(lower(data->>'name')) = trim(lower($1))
+             LIMIT 1`,
+            [raw]
+          )).rows;
         } catch {}
         if (!rows.length) {
           try {
-            rows = (await pool.query(`SELECT data FROM pnjs WHERE lower(data->>'name') LIKE lower($1) ORDER BY data->>'name' LIMIT 5`, [raw.replace(/\s+/g,' ').trim() + '%'])).rows;
+            rows = (await pool.query(
+              `SELECT data FROM pnjs
+               WHERE lower(data->>'name') LIKE lower($1)
+               ORDER BY data->>'name'
+               LIMIT 5`,
+              [raw.replace(/\s+/g,' ').trim() + '%']
+            )).rows;
           } catch {}
         }
         if (!rows.length) {
@@ -958,13 +1176,26 @@ app.post('/api/engine/context', async (req, res) => {
             const wheres = tokens.map((_, i) => `lower(data->>'name') LIKE $${i+1}`);
             const params = tokens.map(t => `%${t}%`);
             try {
-              rows = (await pool.query(`SELECT data FROM pnjs WHERE ${wheres.join(' AND ')} ORDER BY data->>'name' LIMIT 10`, params)).rows;
+              rows = (await pool.query(
+                `SELECT data FROM pnjs
+                 WHERE ${wheres.join(' AND ')}
+                 ORDER BY data->>'name'
+                 LIMIT 10`,
+                params
+              )).rows;
             } catch {}
           }
         }
         if (!rows.length) {
           try {
-            const likeRow = (await pool.query(`SELECT (data->>'id') AS id FROM pnjs WHERE lower(data->>'name') LIKE lower($1) ORDER BY data->>'name' LIMIT 1`, [`%${raw}%`])).rows[0];
+            const likeRow = (await pool.query(
+              `SELECT (data->>'id') AS id
+               FROM pnjs
+               WHERE lower(data->>'name') LIKE lower($1)
+               ORDER BY data->>'name'
+               LIMIT 1`,
+              [`%${raw}%`]
+            )).rows[0];
             if (likeRow?.id) pnjs = await loadPnjsByIds([likeRow.id]);
           } catch {}
         } else {
@@ -972,12 +1203,13 @@ app.post('/api/engine/context', async (req, res) => {
         }
       }
     } else {
-      // Détection automatique depuis userText
+      // détection automatique via userText
       const txt = userText.toLowerCase();
       const tokens = Array.from(new Set(
-        txt.split(/[^a-zàâçéèêëîïôùûüÿñœ'-]+/i)
-           .map(t => t.trim())
-           .filter(t => t.length >= 3)
+        txt
+          .split(/[^a-zàâçéèêëîïôùûüÿñœ'-]+/i)
+          .map(t => t.trim())
+          .filter(t => t.length >= 3)
       )).slice(0, 5);
 
       let rows = [];
@@ -987,7 +1219,10 @@ app.post('/api/engine/context', async (req, res) => {
         try {
           rows = (
             await pool.query(
-              `SELECT data FROM pnjs WHERE ${wheres.join(' AND ')} ORDER BY data->>'name' LIMIT 6`,
+              `SELECT data FROM pnjs
+               WHERE ${wheres.join(' AND ')}
+               ORDER BY data->>'name'
+               LIMIT 6`,
               params
             )
           ).rows;
@@ -1000,7 +1235,10 @@ app.post('/api/engine/context', async (req, res) => {
         try {
           rows = (
             await pool.query(
-              `SELECT data FROM pnjs WHERE ${wheres.join(' AND ')} ORDER BY data->>'name' LIMIT 6`,
+              `SELECT data FROM pnjs
+               WHERE ${wheres.join(' AND ')}
+               ORDER BY data->>'name'
+               LIMIT 6`,
               params
             )
           ).rows;
@@ -1009,31 +1247,35 @@ app.post('/api/engine/context', async (req, res) => {
       pnjs = rows.map(r => r.data);
     }
 
-    // Réhydratation si rien + roster épinglé
+    // fallback : roster épinglé
     if (!pnjs.length) {
       const pinned = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
       if (pinned.length) {
         pnjs = await loadPnjsByIds(pinned);
       }
     }
-    // Si ids fournis → maj pinRoster
+
+    // si ids fournis → maj pinRoster
     const providedIds = Array.isArray(body.pnjIds) ? body.pnjIds.map(String) : [];
     if (providedIds.length) {
       sess.data.pinRoster = providedIds.slice(0, 8);
       await saveSession(sid, sess.data);
     }
-    // mémo
+
+    // mémo narratif bref
     const lastNotes = Array.isArray(sess.data.notes) ? sess.data.notes.slice(-5) : [];
     const memo = lastNotes.length
       ? `\nMEMO (résumés précédents):\n- ${lastNotes.join('\n- ')}\n`
       : '';
 
     const pnjCards = pnjs.slice(0, 8).map(compactCard);
+
     sess.data.dossiersById = sess.data.dossiersById || {};
     for (const p of pnjs.slice(0, 8)) {
       sess.data.dossiersById[p.id] = continuityDossier(p);
     }
     await saveSession(sid, sess.data);
+
     const dossiers = pnjs.map(p => sess.data.dossiersById[p.id]).filter(Boolean);
 
     const rules = [
@@ -1045,10 +1287,15 @@ app.post('/api/engine/context', async (req, res) => {
 
     const styleText = String(narrativeStyle?.styleText || '').trim();
     const contentGuard = `Niveau contenu: ${contentSettings?.explicitLevel || 'mature'} (pas de détails graphiques).`;
-    const style = [styleText || 'Light novel isekai, sobre, immersif.', contentGuard].join(' ');
+    const style = [
+      styleText || 'Light novel isekai, sobre, immersif.',
+      contentGuard
+    ].join(' ');
 
     const roster = pnjCards.map(c => `${c.name}#${c.id}`).join(', ');
-    const anchors = dossiers.map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`).join('\n');
+    const anchors = dossiers
+      .map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`)
+      .join('\n');
 
     const systemHint =
 `[ENGINE CONTEXT]
@@ -1095,7 +1342,11 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
     console.error('engine/context error:', e);
     return res.status(500).json({
       guard: { antiLoop: { token: null, lastHashes: [] }, rules: '', style: '' },
-      pnjCards: [], dossiers: [], systemHint: '', turn: 0, error: 'engine/context error'
+      pnjCards: [],
+      dossiers: [],
+      systemHint: '',
+      turn: 0,
+      error: 'engine/context error'
     });
   }
 });
@@ -1109,12 +1360,16 @@ app.post('/api/engine/commit', async (req, res) => {
     const fp = fingerprint(modelReply || '');
     sess.data.lastReplies = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies : [];
     sess.data.lastReplies.push(fp);
-    if (sess.data.lastReplies.length > 10) sess.data.lastReplies = sess.data.lastReplies.slice(-10);
+    if (sess.data.lastReplies.length > 10) {
+      sess.data.lastReplies = sess.data.lastReplies.slice(-10);
+    }
 
     if (notes) {
       sess.data.notes = Array.isArray(sess.data.notes) ? sess.data.notes : [];
       sess.data.notes.push(String(notes).slice(0, 300));
-      if (sess.data.notes.length > 50) sess.data.notes = sess.data.notes.slice(-50);
+      if (sess.data.notes.length > 50) {
+        sess.data.notes = sess.data.notes.slice(-50);
+      }
     }
 
     sess.data.turn = Number(sess.data.turn || 0) + 1;
@@ -1124,13 +1379,24 @@ app.post('/api/engine/commit', async (req, res) => {
         const id = String(u?.id || '');
         const patch = u?.patch || {};
         if (!id || typeof patch !== 'object') continue;
+
         const cur = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
         if (!cur.rows.length) continue;
-        const current = cur.rows[0].data; const locks = new Set(current.lockedTraits || []);
+
+        const current = cur.rows[0].data;
+        const locks = new Set(current.lockedTraits || []);
         const incoming = { ...patch };
-        for (const f of locks) if (f in incoming && JSON.stringify(incoming[f]) !== JSON.stringify(current[f])) delete incoming[f];
+        for (const f of locks) {
+          if (f in incoming && JSON.stringify(incoming[f]) !== JSON.stringify(current[f])) {
+            delete incoming[f];
+          }
+        }
+
         const merged = { ...current, ...incoming, id };
-        await pool.query('UPDATE pnjs SET data=$2::jsonb WHERE id=$1', [id, JSON.stringify(merged)]);
+        await pool.query(
+          'UPDATE pnjs SET data=$2::jsonb WHERE id=$1',
+          [id, JSON.stringify(merged)]
+        );
       }
     }
 
@@ -1138,15 +1404,24 @@ app.post('/api/engine/commit', async (req, res) => {
       const id = String(lock.id);
       const cur = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
       if (cur.rows.length) {
-        const p = cur.rows[0].data; const set = new Set(p.lockedTraits || []);
-        for (const f of lock.fields) set.add(String(f)); p.lockedTraits = Array.from(set);
-        await pool.query('UPDATE pnjs SET data=$2::jsonb WHERE id=$1', [id, JSON.stringify(p)]);
+        const p = cur.rows[0].data;
+        const set = new Set(p.lockedTraits || []);
+        for (const f of lock.fields) set.add(String(f));
+        p.lockedTraits = Array.from(set);
+        await pool.query(
+          'UPDATE pnjs SET data=$2::jsonb WHERE id=$1',
+          [id, JSON.stringify(p)]
+        );
       }
     }
 
     await saveSession(sid || 'default', sess.data);
+
     res.json({ ok: true, turn: sess.data.turn, lastHash: fp });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'engine/commit error' }); }
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'engine/commit error' });
+  }
 });
 
 // =================== STYLE & CONTENT SETTINGS ===================
@@ -1154,6 +1429,7 @@ app.post('/api/style', (req, res) => {
   narrativeStyle = req.body || { styleText: '' };
   res.json({ message: 'Style mis à jour.' });
 });
+
 app.post('/api/settings/content', (req, res) => {
   const allowed = ['safe','mature','fade'];
   const lvl = (req.body?.explicitLevel || '').toLowerCase();
@@ -1165,24 +1441,21 @@ app.post('/api/settings/content', (req, res) => {
 app.post('/api/roll', (req, res) => {
   const { dice } = req.body || {};
   const p = parseDiceFormula(dice);
-  if (!p) return res.status(400).json({ message: 'Formule invalide. Utilise NdM±K (ex: 1d20+3).' });
+  if (!p) {
+    return res.status(400).json({
+      message: 'Formule invalide. Utilise NdM±K (ex: 1d20+3).'
+    });
+  }
   const rolls = Array.from({ length: p.count }, () => rollOnce(p.sides));
   const total = rolls.reduce((a, b) => a + b, 0) + p.modifier;
   res.json({ result: total, rolls, modifier: p.modifier, formula: dice });
 });
+
+// =================== PNJ COMBAT SNAPSHOT ===================
 app.get('/api/pnjs/:id/compute-stats', async (req, res) => {
   try {
     const id = req.params.id;
 
-app.get('/api/pnjs/:id/compute-stats', async (req, res) => {
-  try {
-    const id = req.params.id;
-
-app.get('/api/pnjs/:id/compute-stats', async (req, res) => {
-  try {
-    const id = req.params.id;
-
-    // Exemple : tu lis ton PNJ depuis ta base (PostgreSQL ou autre)
     const r = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
     if (!r.rows.length) {
       return res.status(404).json({ message: 'PNJ non trouvé.' });
@@ -1190,7 +1463,6 @@ app.get('/api/pnjs/:id/compute-stats', async (req, res) => {
 
     const p = r.rows[0].data || {};
 
-    // Calcul rapide des stats de combat
     const snapshot = {
       id: p.id,
       name: p.name,
@@ -1208,29 +1480,51 @@ app.get('/api/pnjs/:id/compute-stats', async (req, res) => {
   }
 });
 
-
 // =================== HEALTH ===================
 app.get('/api/db/health', async (req, res) => {
-  try { await pool.query('SELECT 1'); res.json({ ok: true }); }
-  catch (e) { res.status(500).json({ ok: false, error: 'DB error' }); }
+  try {
+    await pool.query('SELECT 1');
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: 'DB error' });
+  }
 });
 
 // =================== BACKUPS ===================
-// Snapshot complet (pnjs, canon, races, sessions) – à télécharger côté client
+// Snapshot complet
 app.get('/api/backup/snapshot', async (req, res) => {
   try {
     const pnjs = (await pool.query('SELECT data FROM pnjs')).rows.map(r => r.data);
     const canon = (await pool.query('SELECT data FROM canon_profiles')).rows.map(r => r.data);
-    const sessions = (await pool.query('SELECT id, data FROM sessions')).rows.map(r => ({ id: r.id, data: r.data }));
-    res.json({ pnjs, canon, races, sessions, generatedAt: new Date().toISOString() });
-  } catch (e) { console.error(e); res.status(500).json({ message: 'DB error' }); }
+    const sessions = (await pool.query('SELECT id, data FROM sessions')).rows.map(r => ({
+      id: r.id,
+      data: r.data
+    }));
+    res.json({
+      pnjs,
+      canon,
+      races,
+      sessions,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ message: 'DB error' });
+  }
 });
 
-// Restore (upsert) – body: { pnjs?:[], canon?:[], races?:[], sessions?:[] }
+// Restore (upsert)
 app.post('/api/backup/restore', async (req, res) => {
   try {
-    const { pnjs = [], canon = [], races: inRaces = null, sessions = [] } = req.body || {};
+    const {
+      pnjs = [],
+      canon = [],
+      races: inRaces = null,
+      sessions = []
+    } = req.body || {};
+
     await pool.query('BEGIN');
+
     if (Array.isArray(pnjs)) {
       for (const p of pnjs) {
         const id = String(p.id || Date.now().toString() + Math.random().toString(36).slice(2,6));
@@ -1241,6 +1535,7 @@ app.post('/api/backup/restore', async (req, res) => {
         );
       }
     }
+
     if (Array.isArray(canon)) {
       for (const c of canon) {
         const id = String(c.id || slugifyId(c.name || ('canon-' + Date.now())));
@@ -1251,6 +1546,7 @@ app.post('/api/backup/restore', async (req, res) => {
         );
       }
     }
+
     if (Array.isArray(sessions)) {
       for (const s of sessions) {
         const id = String(s.id || 'default');
@@ -1262,13 +1558,23 @@ app.post('/api/backup/restore', async (req, res) => {
         );
       }
     }
+
     if (inRaces && Array.isArray(inRaces)) {
-      // surcharge races.json (FS éphémère en prod — à récupérer via snapshot quand même)
       races = inRaces;
       saveRaces();
     }
+
     await pool.query('COMMIT');
-    res.json({ ok: true, counts: { pnjs: pnjs.length, canon: canon.length, sessions: sessions.length, races: Array.isArray(inRaces) ? inRaces.length : undefined } });
+
+    res.json({
+      ok: true,
+      counts: {
+        pnjs: pnjs.length,
+        canon: canon.length,
+        sessions: sessions.length,
+        races: Array.isArray(inRaces) ? inRaces.length : undefined
+      }
+    });
   } catch (e) {
     console.error(e);
     try { await pool.query('ROLLBACK'); } catch {}
@@ -1277,6 +1583,6 @@ app.post('/api/backup/restore', async (req, res) => {
 });
 
 // ---------------- Lancement ----------------
-app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
-
-
+app.listen(port, () => {
+  console.log(`JDR API en ligne sur http://localhost:${port}`);
+});
