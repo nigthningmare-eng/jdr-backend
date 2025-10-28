@@ -1170,6 +1170,44 @@ app.post('/api/roll', (req, res) => {
   const total = rolls.reduce((a, b) => a + b, 0) + p.modifier;
   res.json({ result: total, rolls, modifier: p.modifier, formula: dice });
 });
+app.get('/api/pnjs/:id/compute-stats', async (req, res) => {
+  try {
+    const id = req.params.id;
+
+app.get('/api/pnjs/:id/compute-stats', async (req, res) => {
+  try {
+    const id = req.params.id;
+
+app.get('/api/pnjs/:id/compute-stats', async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    // Exemple : tu lis ton PNJ depuis ta base (PostgreSQL ou autre)
+    const r = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (!r.rows.length) {
+      return res.status(404).json({ message: 'PNJ non trouvé.' });
+    }
+
+    const p = r.rows[0].data || {};
+
+    // Calcul rapide des stats de combat
+    const snapshot = {
+      id: p.id,
+      name: p.name,
+      level: p.level || 1,
+      hp: p.stats?.hp ?? 100,
+      mp: p.stats?.mp ?? 50,
+      stats: p.stats || {},
+      statusEffects: Array.isArray(p.statusEffects) ? p.statusEffects : []
+    };
+
+    res.json(snapshot);
+  } catch (e) {
+    console.error('GET /api/pnjs/:id/compute-stats error:', e);
+    res.status(500).json({ message: 'Erreur interne du serveur' });
+  }
+});
+
 
 // =================== HEALTH ===================
 app.get('/api/db/health', async (req, res) => {
@@ -1240,4 +1278,5 @@ app.post('/api/backup/restore', async (req, res) => {
 
 // ---------------- Lancement ----------------
 app.listen(port, () => { console.log(`JDR API en ligne sur http://localhost:${port}`); });
+
 
