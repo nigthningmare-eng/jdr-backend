@@ -264,7 +264,7 @@ app.post('/api/pnjs/bulk', async (req, res) => {
     const toUpsert = items.map((p) => {
       const pn = { ...(p || {}) };
       pn.id = pn.id || Date.now().toString() + Math.random().toString(36).slice(2,6);
-      pn.level = Number.isFinite(pn.level) ? pn.level : 1;
+      pn.level = Number.isFinite(pn.level) ? pнlevel : 1;
       pn.xp = Number.isFinite(pn.xp) ? pn.xp : 0;
       pn.stats = pn.stats || {};
       return pn;
@@ -1247,9 +1247,34 @@ app.post('/api/engine/context', async (req, res) => {
       pnjs = rows.map(r => r.data);
     }
 
-    // fallback : roster épinglé
+    // toujours fusionner avec le roster épinglé
+    const pinned = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
+    if (pinned.length) {
+      const pinnedPnjs = await loadPnjsByIds(pinned);
+      const existingIds = new Set(pnjs.map(p => p.id));
+      for (const p of pinnedPnjs) {
+        if (!existingIds.has(p.id)) pnjs.push(p);
+      }
+    }
+
+    // toujours fusionner avec les PNJ du tour précédent (si on les a sauvegardés)
+    const prevCards = Array.isArray(sess.data.lastPnjCards) ? sess.data.lastPnjCards : [];
+    if (prevCards.length) {
+      const existingIds = new Set(pnjs.map(p => p.id));
+      for (const c of prevCards) {
+        // c est une compactCard → on doit recharger la version complète
+        if (!existingIds.has(c.id)) {
+          const loaded = await loadPnjsByIds([c.id]);
+          if (loaded.length) {
+            pnjs.push(loaded[0]);
+            existingIds.add(c.id);
+          }
+        }
+      }
+    }
+
+    // fallback : roster épinglé si vraiment rien
     if (!pnjs.length) {
-      const pinned = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
       if (pinned.length) {
         pnjs = await loadPnjsByIds(pinned);
       }
@@ -1274,6 +1299,9 @@ app.post('/api/engine/context', async (req, res) => {
     for (const p of pnjs.slice(0, 8)) {
       sess.data.dossiersById[p.id] = continuityDossier(p);
     }
+
+    // on garde la liste pour le tour suivant
+    sess.data.lastPnjCards = pnjCards;
     await saveSession(sid, sess.data);
 
     const dossiers = pnjs.map(p => sess.data.dossiersById[p.id]).filter(Boolean);
@@ -1282,7 +1310,7 @@ app.post('/api/engine/context', async (req, res) => {
       'Toujours respecter lockedTraits.',
       "Ne jamais changer l'identité d'un PNJ (Nom, race, relations clés).",
       'Évite les répétitions (ne recopie pas mot pour mot les 2 dernières répliques).',
-      'Si doute, demande une micro-clarification.'
+      'Interdit d’écrire seulement “La scène a été jouée/enregistrée.” — écrire la scène complète.'
     ].join(' ');
 
     const styleText = String(narrativeStyle?.styleText || '').trim();
@@ -1298,12 +1326,12 @@ app.post('/api/engine/context', async (req, res) => {
       .join('\n');
 
     const systemHint =
-`[ENGINE CONTEXT]
+`STYLE (OBLIGATOIRE): ${style}
+
+[ENGINE CONTEXT]
 ${memo}Session: ${sid}
 Tour: ${Number(sess.data.turn || 0) + 1}
 AntiLoopToken: ${token}
-
-STYLE: ${style}
 
 ROSTER: ${roster}
 
@@ -1320,8 +1348,6 @@ ${pnjCards.map(c => `- ${c.name}#${c.id}
   skills: ${JSON.stringify(c.skills || [])}
   location: ${c.locationId || '(n/a)'}
 `).join('\n')}
-
-Si plusieurs PNJ correspondent, utilise le premier de la liste (ou demande une micro-clarification au joueur).
 
 Format:
 # [Lieu] — [Date/Heure]
@@ -1342,7 +1368,7 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
     console.error('engine/context error:', e);
     return res.status(500).json({
       guard: { antiLoop: { token: null, lastHashes: [] }, rules: '', style: '' },
-      pnjCards: [],
+      pnjCards: [], // on renvoie vide mais côté GPT il devra quand même écrire
       dossiers: [],
       systemHint: '',
       turn: 0,
@@ -1355,9 +1381,28 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
 app.post('/api/engine/commit', async (req, res) => {
   try {
     const { sid, modelReply, notes, pnjUpdates, lock } = req.body || {};
+    const scene = String(modelReply || '').trim();
+
+    // anti-commits méta (quand le GPT dit juste "scène jouée")
+    const metaPatterns = [
+      'La scène a été jouée',
+      'La scène a été rejouée',
+      'Scène immersive lancée',
+      'scène enregistrée',
+      'Scène enregistrée'
+    ];
+    const tooShort = scene.length < 100;
+    const looksMeta = metaPatterns.some(p => scene.includes(p));
+    if (tooShort || looksMeta) {
+      return res.status(400).json({
+        ok: false,
+        message: 'modelReply invalide : la scène doit être rédigée, pas seulement annoncée.'
+      });
+    }
+
     const sess = await getOrInitSession(sid || 'default');
 
-    const fp = fingerprint(modelReply || '');
+    const fp = fingerprint(scene);
     sess.data.lastReplies = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies : [];
     sess.data.lastReplies.push(fp);
     if (sess.data.lastReplies.length > 10) {
