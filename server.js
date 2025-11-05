@@ -264,7 +264,8 @@ app.post('/api/pnjs/bulk', async (req, res) => {
     const toUpsert = items.map((p) => {
       const pn = { ...(p || {}) };
       pn.id = pn.id || Date.now().toString() + Math.random().toString(36).slice(2,6);
-      pn.level = Number.isFinite(pn.level) ? pнlevel : 1;
+      // correction ici
+      pn.level = Number.isFinite(pn.level) ? pn.level : 1;
       pn.xp = Number.isFinite(pn.xp) ? pn.xp : 0;
       pn.stats = pn.stats || {};
       return pn;
@@ -1357,6 +1358,21 @@ Format:
 
 _Notes MJ (courtes)_: [événements | verrous | xp]`;
 
+    // 👉 préchauffage PNJ global (optionnel, comme tu voulais)
+    try {
+      const allPnjs = await pool.query('SELECT data FROM pnjs LIMIT 1000');
+      sess.data.dossiersById = sess.data.dossiersById || {};
+      for (const r of allPnjs.rows) {
+        const p = r.data;
+        if (p && p.id) {
+          sess.data.dossiersById[p.id] = continuityDossier(p);
+        }
+      }
+      await saveSession(sid, sess.data);
+    } catch (e) {
+      // on ignore en cas d'hébergeur lent
+    }
+
     return res.status(200).json({
       guard: { antiLoop: { token, lastHashes }, rules, style },
       pnjCards,
@@ -1631,17 +1647,3 @@ app.post('/api/backup/restore', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
-‎base‎
-7 ReferencesSearch
-
-‎In this file‎
-function deepMerge(base, update) {
-  if (Array.isArray(base) || Array.isArray(update)) return update;
-  if (base && typeof base === 'object' && update && typeof update === 'object') {
-  if (base && typeof base === 'object' && update && typeof update === 'object') {
-    const out = { ...base };
-    for (const k of Object.keys(update)) out[k] = deepMerge(base[k], update[k]);
-  return update === undefined ? base : update;
- 
-jdr-backend/server.js at main · nigthningmare-eng/jdr-backend
-
