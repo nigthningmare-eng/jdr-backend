@@ -1,9 +1,8 @@
-// ==== JDR Backend (PNJ Postgres + CRUD + Contexte narratif + Canon + Backups + Settings + Fichiers) ====
+// ==== JDR Backend (PNJ Postgres + CRUD + Contexte + Canon + Backups + Settings) ====
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const multer = require('multer');
 const { Pool } = require('pg');
 
 const app = express();
@@ -13,20 +12,6 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
-
-// dossier pour les uploads
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-// config multer (upload de fichiers)
-const upload = multer({
-  dest: uploadsDir,
-  limits: {
-    fileSize: 30 * 1024 * 1024 // 30 Mo
-  }
-});
 
 // ---------- DB ----------
 const pool = new Pool({
@@ -39,9 +24,9 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000
 });
 
-// on garde ces deux-là en mémoire, mais désormais on les sauve aussi en DB
-let narrativeStyle = { styleText: '' }; // sera rechargé depuis settings
-let contentSettings = { explicitLevel: 'mature' }; // sera aussi sauvable plus tard si tu veux
+// en mémoire, mais on va le charger depuis la table settings
+let narrativeStyle = { styleText: '' };
+let contentSettings = { explicitLevel: 'mature' };
 
 // ---------- Init tables ----------
 (async () => {
@@ -60,56 +45,45 @@ let contentSettings = { explicitLevel: 'mature' }; // sera aussi sauvable plus t
         data JSONB NOT NULL
       );
     `);
-    // sessions de jeu
+    // sessions
     await pool.query(`
       CREATE TABLE IF NOT EXISTS sessions (
         id   TEXT  PRIMARY KEY,
         data JSONB NOT NULL
       );
     `);
-    // settings (nouveau)
+    // settings
     await pool.query(`
       CREATE TABLE IF NOT EXISTS settings (
         key   TEXT PRIMARY KEY,
         value JSONB NOT NULL
       );
     `);
-    // fichiers (nouveau)
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS files (
-        id           TEXT PRIMARY KEY,
-        original_name TEXT NOT NULL,
-        stored_name   TEXT NOT NULL,
-        mime_type     TEXT NOT NULL,
-        size_bytes    INTEGER NOT NULL,
-        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
 
-    // on recharge le style s'il existe
+    // on tente de recharger le style
     try {
       const r = await pool.query(`SELECT value FROM settings WHERE key = 'narrativeStyle'`);
       if (r.rows.length) {
         narrativeStyle = r.rows[0].value;
-        console.log('Style narratif chargé depuis la base.');
+        console.log('Style narratif rechargé depuis la base.');
       } else {
-        console.log('Aucun style narratif trouvé en base (style par défaut).');
+        console.log('Pas de style narratif en base, on garde vide.');
       }
     } catch (e) {
-      console.log('Impossible de charger le style narratif, utilisation du défaut.', e.message);
+      console.log('Impossible de relire le style, on garde vide.', e.message);
     }
 
-    console.log('Tables pnjs, canon_profiles, sessions, settings, files OK');
+    console.log('Tables OK');
   } catch (e) {
     console.error('DB init failed:', e);
   }
 })();
 
-// ---------- Mémoire légère (fichiers locaux) ----------
-const racesPath = './races.json';
-function safeRequire(path, fallback) {
+// ---------- Mémoire légère (races.json) ----------
+const racesPath = path.join(__dirname, 'races.json');
+function safeRequire(p, fallback) {
   try {
-    if (fs.existsSync(path)) return require(path);
+    if (fs.existsSync(p)) return require(p);
   } catch {}
   return fallback;
 }
@@ -150,12 +124,11 @@ function deepMerge(base, update) {
   }
   return update === undefined ? base : update;
 }
-
 function clone(v) {
   return JSON.parse(JSON.stringify(v));
 }
 
-// lib canon (je garde ta version courte)
+// lib canon minimal
 const CANON_LIB = {
   tensura: {
     meta: { label: "That Time I Got Reincarnated as a Slime (Tensura)" },
@@ -202,8 +175,7 @@ function mergeCanonIntoPnj(p, canonProfile, opts = { mode: 'fill', franchise: nu
   return out;
 }
 
-// =================== PNJ (CRUD) ====================
-
+// =================== PNJ CRUD ===================
 app.get('/api/pnjs', async (req, res) => {
   const limitMax = 1000;
   const limit = Math.min(parseInt(req.query.limit || '50', 10), limitMax);
@@ -314,8 +286,6 @@ app.delete('/api/pnjs/:id', async (req, res) => {
 });
 
 // =================== STYLE & SETTINGS ===================
-
-// enregistre le style ET le met en mémoire
 app.post('/api/style', async (req, res) => {
   try {
     const style = req.body?.styleText || '';
@@ -333,106 +303,11 @@ app.post('/api/style', async (req, res) => {
   }
 });
 
-// pour info : récupérer le style actuel
 app.get('/api/style', (req, res) => {
   res.json(narrativeStyle);
 });
 
-// =================== FILES (PDF / Word / etc.) ===================
-
-// upload d’un fichier
-app.post('/api/files/upload', upload.single('file'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ message: 'Aucun fichier reçu.' });
-
-    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    await pool.query(
-      `INSERT INTO files (id, original_name, stored_name, mime_type, size_bytes)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [id, req.file.originalname, req.file.filename, req.file.mimetype, req.file.size]
-    );
-
-    res.status(201).json({
-      id,
-      originalName: req.file.originalname,
-      mimeType: req.file.mimetype,
-      size: req.file.size
-    });
-  } catch (e) {
-    console.error('POST /api/files/upload error:', e);
-    res.status(500).json({ message: 'DB error' });
-  }
-});
-
-// lister les fichiers
-app.get('/api/files', async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT id, original_name AS originalName, mime_type AS mimeType, size_bytes AS size, created_at AS createdAt
-       FROM files
-       ORDER BY created_at DESC
-       LIMIT 100`
-    );
-    res.json(rows);
-  } catch (e) {
-    console.error('GET /api/files error:', e);
-    res.status(500).json({ message: 'DB error' });
-  }
-});
-
-// télécharger un fichier
-app.get('/api/files/:id', async (req, res) => {
-  try {
-    const id = req.params.id;
-    const r = await pool.query(
-      `SELECT original_name, stored_name, mime_type FROM files WHERE id = $1`,
-      [id]
-    );
-    if (!r.rows.length) return res.status(404).json({ message: 'Fichier introuvable' });
-
-    const file = r.rows[0];
-    const filePath = path.join(uploadsDir, file.stored_name);
-    if (!fs.existsSync(filePath)) return res.status(404).json({ message: 'Fichier manquant sur le disque' });
-
-    res.setHeader('Content-Type', file.mime_type);
-    res.setHeader('Content-Disposition', `attachment; filename="${file.original_name}"`);
-    fs.createReadStream(filePath).pipe(res);
-  } catch (e) {
-    console.error('GET /api/files/:id error:', e);
-    res.status(500).json({ message: 'Erreur serveur' });
-  }
-});
-
-// (facultatif) endpoint qui tenterait d'extraire du texte
-// pour l’instant on renvoie juste un message
-app.get('/api/files/:id/text', async (req, res) => {
-  try {
-    const id = req.params.id;
-    const r = await pool.query(`SELECT original_name, stored_name, mime_type FROM files WHERE id=$1`, [id]);
-    if (!r.rows.length) return res.status(404).json({ message: 'Fichier introuvable' });
-
-    const file = r.rows[0];
-    // ici tu pourrais faire :
-    // - si PDF : utiliser pdf-parse
-    // - si DOCX : utiliser mammoth
-    // - si TXT : fs.readFileSync
-    // je laisse un placeholder
-    res.json({
-      message: 'Extraction pas encore implémentée côté serveur.',
-      file: {
-        name: file.original_name,
-        mime: file.mime_type
-      }
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'Erreur serveur' });
-  }
-});
-
-// =================== ENGINE (contexte) ===================
-
-// petites fonctions pour le moteur
+// =================== ENGINE (contexte très simple) ===================
 function compactCard(p) {
   return {
     id: p.id,
@@ -465,7 +340,6 @@ async function saveSession(sid, data) {
   );
 }
 
-// contexte principal
 app.post('/api/engine/context', async (req, res) => {
   const sid = String(req.body?.sid || 'default');
   const userText = String(req.body?.userText || '');
@@ -473,34 +347,23 @@ app.post('/api/engine/context', async (req, res) => {
   try {
     const sess = await getOrInitSession(sid);
 
-    // on va juste prendre quelques PNJ pour le contexte
     const { rows } = await pool.query(
       `SELECT data FROM pnjs ORDER BY (data->>'name') NULLS LAST, id LIMIT 8`
     );
     const pnjCards = rows.map(r => compactCard(r.data));
 
-    // on prend aussi les derniers fichiers uploadés pour que GPT sache qu'ils existent
-    const files = (await pool.query(
-      `SELECT id, original_name AS originalName, mime_type AS mimeType
-       FROM files
-       ORDER BY created_at DESC
-       LIMIT 10`
-    )).rows;
-
     const styleText = narrativeStyle?.styleText || 'Light novel immersif.';
     const systemHint =
       `STYLE: ${styleText}\n` +
       `USER SAID: ${userText}\n` +
-      `DOCS DISPOS: ${files.map(f => `${f.originalname || f.originalName} (#${f.id})`).join(', ')}`;
+      `PNJ DISPO: ${pnjCards.map(p => p.name).join(', ')}`;
 
-    // on incrémente le tour
     sess.data.turn = Number(sess.data.turn || 0) + 1;
     await saveSession(sid, sess.data);
 
     res.json({
       guard: { style: styleText },
       pnjCards,
-      docs: files,
       systemHint,
       turn: sess.data.turn
     });
@@ -509,6 +372,9 @@ app.post('/api/engine/context', async (req, res) => {
     res.status(500).json({ message: 'engine/context error' });
   }
 });
+
+// =================== RACES (facultatif, fichier) ===================
+app.get('/api/races', (req, res) => res.json(races));
 
 // =================== ROLL ===================
 app.post('/api/roll', (req, res) => {
