@@ -1,3 +1,43 @@
+Aller au contenu
+Menu Navigation
+nigthningmare-eng
+jdr-backend
+
+Type / pour chercher
+Code
+Problèmes
+Requêtes de tirage
+Actions
+Projets
+Wiki
+Sécurité
+Aperçus
+Paramètres
+Fichiers
+Aller au fichier
+t
+backend jdr
+paquet.json
+pnjs.json
+courses.json
+serveur.js
+storyState.json
+backend jdr
+/serveur.js
+nigthningmare-eng
+nègre-eng
+Mettre à jour le serveur.js
+994c790
+ · 
+yesterday
+backend jdr
+/serveur.js
+
+Code
+
+Blâmer
+1633 lignes (1454 loc) · 55 Ko
+function slugifyId(str) {
 // ==== JDR Backend (PNJ Postgres + CRUD + Contexte narratif robuste + Canon + Backups) ====
 const express = require('express');
 const cors = require('cors');
@@ -1631,3 +1671,15 @@ app.post('/api/backup/restore', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+‎base‎
+7 ReferencesSearch
+
+‎In this file‎
+function deepMerge(base, update) {
+  if (Array.isArray(base) || Array.isArray(update)) return update;
+  if (base && typeof base === 'object' && update && typeof update === 'object') {
+  if (base && typeof base === 'object' && update && typeof update === 'object') {
+    const out = { ...base };
+    for (const k of Object.keys(update)) out[k] = deepMerge(base[k], update[k]);
+  return update === undefined ? base : update;
+ 
