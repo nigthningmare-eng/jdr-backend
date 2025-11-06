@@ -1589,10 +1589,14 @@ app.post('/api/backup/restore', async (req, res) => {
     res.status(500).json({ message: 'DB error' });
   }
 });
+app.get('/api/ping', (req, res) => {
+  res.json({ ok: true, ts: new Date().toISOString() });
+});
 
 // ---------------- Lancement ----------------
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
