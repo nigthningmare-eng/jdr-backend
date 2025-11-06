@@ -1164,14 +1164,17 @@ app.post('/api/engine/context', async (req, res) => {
     const lastHashes = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies.slice(-3) : [];
     const token = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
-    // Résolution PNJ par ids, noms, ou détection auto
+    // ================== RÉSOLUTION PNJ ==================
     let pnjs = [];
     if (pnjIds.length) {
+      // 1) ids envoyés
       pnjs = await loadPnjsByIds(pnjIds);
     } else if (pnjNames.length) {
+      // 2) on a un nom précis
       const raw = String(pnjNames[0] || '').trim();
       if (raw) {
         let rows = [];
+        // essai exact
         try {
           rows = (await pool.query(
             `SELECT data FROM pnjs
@@ -1180,6 +1183,7 @@ app.post('/api/engine/context', async (req, res) => {
             [raw]
           )).rows;
         } catch {}
+        // essai "commence par"
         if (!rows.length) {
           try {
             rows = (await pool.query(
@@ -1191,6 +1195,7 @@ app.post('/api/engine/context', async (req, res) => {
             )).rows;
           } catch {}
         }
+        // essai "tous les mots"
         if (!rows.length) {
           const tokens = raw.toLowerCase().split(/\s+/).filter(Boolean);
           if (tokens.length) {
@@ -1207,6 +1212,7 @@ app.post('/api/engine/context', async (req, res) => {
             } catch {}
           }
         }
+        // essai "contient"
         if (!rows.length) {
           try {
             const likeRow = (await pool.query(
@@ -1224,7 +1230,7 @@ app.post('/api/engine/context', async (req, res) => {
         }
       }
     } else {
-      // détection automatique via userText
+      // 3) détection automatique dans le texte
       const txt = userText.toLowerCase();
       const tokens = Array.from(new Set(
         txt
@@ -1268,7 +1274,7 @@ app.post('/api/engine/context', async (req, res) => {
       pnjs = rows.map(r => r.data);
     }
 
-    // toujours fusionner avec le roster épinglé
+    // 4) toujours fusionner avec le roster épinglé
     const pinned = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
     if (pinned.length) {
       const pinnedPnjs = await loadPnjsByIds(pinned);
@@ -1278,7 +1284,7 @@ app.post('/api/engine/context', async (req, res) => {
       }
     }
 
-    // toujours fusionner avec les PNJ du tour précédent
+    // 5) toujours fusionner avec les PNJ du tour précédent
     const prevCards = Array.isArray(sess.data.lastPnjCards) ? sess.data.lastPnjCards : [];
     if (prevCards.length) {
       const existingIds = new Set(pnjs.map(p => p.id));
@@ -1293,21 +1299,19 @@ app.post('/api/engine/context', async (req, res) => {
       }
     }
 
-    // fallback : roster épinglé si vraiment rien
-    if (!pnjs.length) {
-      if (pinned.length) {
-        pnjs = await loadPnjsByIds(pinned);
-      }
+    // 6) fallback
+    if (!pnjs.length && pinned.length) {
+      pnjs = await loadPnjsByIds(pinned);
     }
 
-    // si ids fournis → maj pinRoster
+    // 7) si ids fournis → on met à jour le pinRoster
     const providedIds = Array.isArray(body.pnjIds) ? body.pnjIds.map(String) : [];
     if (providedIds.length) {
       sess.data.pinRoster = providedIds.slice(0, 8);
       await saveSession(sid, sess.data);
     }
 
-    // mémo narratif bref
+    // 8) mémo narratif bref
     const lastNotes = Array.isArray(sess.data.notes) ? sess.data.notes.slice(-5) : [];
     const memo = lastNotes.length
       ? `\nMEMO (résumés précédents):\n- ${lastNotes.join('\n- ')}\n`
@@ -1315,11 +1319,11 @@ app.post('/api/engine/context', async (req, res) => {
 
     const pnjCards = pnjs.slice(0, 8).map(compactCard);
 
+    // on met à jour les dossiers
     sess.data.dossiersById = sess.data.dossiersById || {};
     for (const p of pnjs.slice(0, 8)) {
       sess.data.dossiersById[p.id] = continuityDossier(p);
     }
-
     // on garde la liste pour le tour suivant
     sess.data.lastPnjCards = pnjCards;
     await saveSession(sid, sess.data);
@@ -1388,7 +1392,7 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
     console.error('engine/context error:', e);
     return res.status(500).json({
       guard: { antiLoop: { token: null, lastHashes: [] }, rules: '', style: '' },
-      pnjCards: [], // on renvoie vide mais côté GPT il devra quand même écrire
+      pnjCards: [],
       dossiers: [],
       systemHint: '',
       turn: 0,
@@ -1397,97 +1401,6 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
   }
 });
 
-// COMMIT
-app.post('/api/engine/commit', async (req, res) => {
-  try {
-    const { sid, modelReply, notes, pnjUpdates, lock } = req.body || {};
-    const scene = String(modelReply || '').trim();
-
-    // anti-commits méta
-    const metaPatterns = [
-      'La scène a été jouée',
-      'La scène a été rejouée',
-      'Scène immersive lancée',
-      'scène enregistrée',
-      'Scène enregistrée'
-    ];
-    const tooShort = scene.length < 100;
-    const looksMeta = metaPatterns.some(p => scene.includes(p));
-    if (tooShort || looksMeta) {
-      return res.status(400).json({
-        ok: false,
-        message: 'modelReply invalide : la scène doit être rédigée, pas seulement annoncée.'
-      });
-    }
-
-    const sess = await getOrInitSession(sid || 'default');
-
-    const fp = fingerprint(scene);
-    sess.data.lastReplies = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies : [];
-    sess.data.lastReplies.push(fp);
-    if (sess.data.lastReplies.length > 10) {
-      sess.data.lastReplies = sess.data.lastReplies.slice(-10);
-    }
-
-    if (notes) {
-      sess.data.notes = Array.isArray(sess.data.notes) ? sess.data.notes : [];
-      sess.data.notes.push(String(notes).slice(0, 300));
-      if (sess.data.notes.length > 50) {
-        sess.data.notes = sess.data.notes.slice(-50);
-      }
-    }
-
-    sess.data.turn = Number(sess.data.turn || 0) + 1;
-
-    if (Array.isArray(pnjUpdates)) {
-      for (const u of pnjUpdates) {
-        const id = String(u?.id || '');
-        const patch = u?.patch || {};
-        if (!id || typeof patch !== 'object') continue;
-
-        const cur = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
-        if (!cur.rows.length) continue;
-
-        const current = cur.rows[0].data;
-        const locks = new Set(current.lockedTraits || []);
-        const incoming = { ...patch };
-        for (const f of locks) {
-          if (f in incoming && JSON.stringify(incoming[f]) !== JSON.stringify(current[f])) {
-            delete incoming[f];
-          }
-        }
-
-        const merged = { ...current, ...incoming, id };
-        await pool.query(
-          'UPDATE pnjs SET data=$2::jsonb WHERE id=$1',
-          [id, JSON.stringify(merged)]
-        );
-      }
-    }
-
-    if (lock && lock.id && Array.isArray(lock.fields) && lock.fields.length) {
-      const id = String(lock.id);
-      const cur = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
-      if (cur.rows.length) {
-        const p = cur.rows[0].data;
-        const set = new Set(p.lockedTraits || []);
-        for (const f of lock.fields) set.add(String(f));
-        p.lockedTraits = Array.from(set);
-        await pool.query(
-          'UPDATE pnjs SET data=$2::jsonb WHERE id=$1',
-          [id, JSON.stringify(p)]
-        );
-      }
-    }
-
-    await saveSession(sid || 'default', sess.data);
-
-    res.json({ ok: true, turn: sess.data.turn, lastHash: fp });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'engine/commit error' });
-  }
-});
 
 // =================== STYLE & CONTENT SETTINGS ===================
 // ← ICI on modifie pour que ça enregistre aussi en DB
@@ -1667,3 +1580,4 @@ app.post('/api/backup/restore', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
