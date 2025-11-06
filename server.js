@@ -1149,7 +1149,7 @@ app.post('/api/engine/refresh', async (req, res) => {
   }
 });
 
-// CONTEXT (tour de jeu)
+// CONTEXT (tour de jeu) — version avec PNJ_ACTIFS / PNJ_SECOND_PLAN
 app.post('/api/engine/context', async (req, res) => {
   let sid = 'default';
   try {
@@ -1164,17 +1164,16 @@ app.post('/api/engine/context', async (req, res) => {
     const lastHashes = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies.slice(-3) : [];
     const token = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
-    // ================== RÉSOLUTION PNJ ==================
+    // ========= 1. résolution PNJ (ids, noms, ou détection auto) =========
     let pnjs = [];
     if (pnjIds.length) {
-      // 1) ids envoyés
+      // si on reçoit directement des ids → on les charge
       pnjs = await loadPnjsByIds(pnjIds);
     } else if (pnjNames.length) {
-      // 2) on a un nom précis
+      // si on reçoit un ou plusieurs noms → on essaie de les résoudre
       const raw = String(pnjNames[0] || '').trim();
       if (raw) {
         let rows = [];
-        // essai exact
         try {
           rows = (await pool.query(
             `SELECT data FROM pnjs
@@ -1183,7 +1182,6 @@ app.post('/api/engine/context', async (req, res) => {
             [raw]
           )).rows;
         } catch {}
-        // essai "commence par"
         if (!rows.length) {
           try {
             rows = (await pool.query(
@@ -1195,7 +1193,6 @@ app.post('/api/engine/context', async (req, res) => {
             )).rows;
           } catch {}
         }
-        // essai "tous les mots"
         if (!rows.length) {
           const tokens = raw.toLowerCase().split(/\s+/).filter(Boolean);
           if (tokens.length) {
@@ -1212,8 +1209,8 @@ app.post('/api/engine/context', async (req, res) => {
             } catch {}
           }
         }
-        // essai "contient"
         if (!rows.length) {
+          // dernier fallback : on prend un nom qui contient le texte
           try {
             const likeRow = (await pool.query(
               `SELECT (data->>'id') AS id
@@ -1230,7 +1227,7 @@ app.post('/api/engine/context', async (req, res) => {
         }
       }
     } else {
-      // 3) détection automatique dans le texte
+      // détection automatique via le texte du joueur
       const txt = userText.toLowerCase();
       const tokens = Array.from(new Set(
         txt
@@ -1256,6 +1253,7 @@ app.post('/api/engine/context', async (req, res) => {
         } catch {}
       }
       if (!rows.length && tokens.length) {
+        // deuxième tentative : on teste seulement les 2 plus gros tokens
         const top2 = [...tokens].sort((a,b)=>b.length-a.length).slice(0,2);
         const wheres = top2.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
         const params = top2.map(t => `%${t}%`);
@@ -1274,7 +1272,7 @@ app.post('/api/engine/context', async (req, res) => {
       pnjs = rows.map(r => r.data);
     }
 
-    // 4) toujours fusionner avec le roster épinglé
+    // ========= 2. fusion avec le roster épinglé =========
     const pinned = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
     if (pinned.length) {
       const pinnedPnjs = await loadPnjsByIds(pinned);
@@ -1284,7 +1282,7 @@ app.post('/api/engine/context', async (req, res) => {
       }
     }
 
-    // 5) toujours fusionner avec les PNJ du tour précédent
+    // ========= 3. fusion avec les PNJ du tour précédent =========
     const prevCards = Array.isArray(sess.data.lastPnjCards) ? sess.data.lastPnjCards : [];
     if (prevCards.length) {
       const existingIds = new Set(pnjs.map(p => p.id));
@@ -1299,42 +1297,49 @@ app.post('/api/engine/context', async (req, res) => {
       }
     }
 
-    // 6) fallback
+    // ========= 4. fallback : si vraiment rien, on prend le roster épinglé =========
     if (!pnjs.length && pinned.length) {
       pnjs = await loadPnjsByIds(pinned);
     }
 
-    // 7) si ids fournis → on met à jour le pinRoster
+    // si ids fournis → on met à jour le roster épinglé
     const providedIds = Array.isArray(body.pnjIds) ? body.pnjIds.map(String) : [];
     if (providedIds.length) {
       sess.data.pinRoster = providedIds.slice(0, 8);
       await saveSession(sid, sess.data);
     }
 
-    // 8) mémo narratif bref
+    // ========= 5. mémo narratif bref =========
     const lastNotes = Array.isArray(sess.data.notes) ? sess.data.notes.slice(-5) : [];
     const memo = lastNotes.length
       ? `\nMEMO (résumés précédents):\n- ${lastNotes.join('\n- ')}\n`
       : '';
 
+    // on fabrique les cartes compactes
     const pnjCards = pnjs.slice(0, 8).map(compactCard);
 
-    // on met à jour les dossiers
+    // on garde les dossiers de continuité
     sess.data.dossiersById = sess.data.dossiersById || {};
     for (const p of pnjs.slice(0, 8)) {
       sess.data.dossiersById[p.id] = continuityDossier(p);
     }
-    // on garde la liste pour le tour suivant
+    // on garde pour le tour suivant
     sess.data.lastPnjCards = pnjCards;
     await saveSession(sid, sess.data);
 
     const dossiers = pnjs.map(p => sess.data.dossiersById[p.id]).filter(Boolean);
 
+    // ========= 6. séparation actifs / second plan =========
+    const activePnjs = pnjCards.slice(0, 3);   // ceux qui parlent
+    const backgroundPnjs = pnjCards.slice(3);  // présents, bruits, réactions
+
+    // ========= 7. règles MJ + style =========
     const rules = [
       'Toujours respecter lockedTraits.',
-      "Ne jamais changer l'identité d'un PNJ (Nom, race, relations clés).",
-      'Évite les répétitions (ne recopie pas mot pour mot les 2 dernières répliques).',
-      'Interdit d’écrire seulement “La scène a été jouée/enregistrée.” — écrire la scène complète.'
+      "Ne jamais changer l'identité d'un PNJ (nom, race, relations clés).",
+      'Évite les répétitions des 2 dernières répliques.',
+      'Interdit d’écrire seulement “La scène a été jouée/enregistrée.” — écrire la scène complète.',
+      'Les PNJ de second plan peuvent réagir brièvement si c’est logique.'
     ].join(' ');
 
     const styleText = String(narrativeStyle?.styleText || '').trim();
@@ -1349,6 +1354,7 @@ app.post('/api/engine/context', async (req, res) => {
       .map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`)
       .join('\n');
 
+    // ========= 8. systemHint final =========
     const systemHint =
 `STYLE (OBLIGATOIRE): ${style}
 
@@ -1357,14 +1363,20 @@ ${memo}Session: ${sid}
 Tour: ${Number(sess.data.turn || 0) + 1}
 AntiLoopToken: ${token}
 
-ROSTER: ${roster}
+PNJ_ACTIFS (à faire parler dans cette scène):
+${activePnjs.map(c => `- ${c.name}#${c.id} | traits=${JSON.stringify(c.personalityTraits || [])} | locked=${JSON.stringify(c.lockedTraits || [])}`).join('\n')}
+
+PNJ_SECOND_PLAN (présents, réactions brèves autorisées):
+${backgroundPnjs.length ? backgroundPnjs.map(c => `- ${c.name}#${c.id}`).join('\n') : '(aucun)'}
+
+ROSTER COMPLET: ${roster}
 
 ANCHORS (continuité):
 ${anchors}
 
 Do/Don't: ${rules}
 
-PNJ cards:
+PNJ cards détaillées:
 ${pnjCards.map(c => `- ${c.name}#${c.id}
   traits: ${JSON.stringify(c.personalityTraits || [])}
   locked: ${JSON.stringify(c.lockedTraits || [])}
@@ -1373,7 +1385,7 @@ ${pnjCards.map(c => `- ${c.name}#${c.id}
   location: ${c.locationId || '(n/a)'}
 `).join('\n')}
 
-Format:
+Format attendu:
 # [Lieu] — [Date/Heure]
 
 **🙂 NomPNJ** *(émotion)*
@@ -1381,6 +1393,7 @@ Format:
 
 _Notes MJ (courtes)_: [événements | verrous | xp]`;
 
+    // on n’incrémente pas ici le tour (tu le fais peut-être au commit)
     return res.status(200).json({
       guard: { antiLoop: { token, lastHashes }, rules, style },
       pnjCards,
@@ -1400,6 +1413,7 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
     });
   }
 });
+
 
 
 // =================== STYLE & CONTENT SETTINGS ===================
@@ -1580,4 +1594,5 @@ app.post('/api/backup/restore', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
