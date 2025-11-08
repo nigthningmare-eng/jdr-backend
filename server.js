@@ -6,6 +6,10 @@ const { Pool } = require('pg');
 
 const app = express();
 const port = process.env.PORT || 3000;
+function log(...args) {
+  console.log('[JDR]', ...args);
+}
+
 
 // ---------- Middlewares ----------
 app.use(cors());
@@ -1150,6 +1154,7 @@ app.post('/api/engine/refresh', async (req, res) => {
 });
 
 // CONTEXT (tour de jeu) — version avec PNJ_ACTIFS / PNJ_SECOND_PLAN
+// CONTEXT (tour de jeu) — version avec PNJ_ACTIFS / PNJ_SECOND_PLAN
 app.post('/api/engine/context', async (req, res) => {
   let sid = 'default';
   try {
@@ -1159,10 +1164,29 @@ app.post('/api/engine/context', async (req, res) => {
     const pnjIds = Array.isArray(body.pnjIds) ? body.pnjIds : [];
     const pnjNames = Array.isArray(body.pnjNames) ? body.pnjNames : (body.name ? [String(body.name)] : []);
 
+    // 👉 super utile pour debug Render
+    console.log('[engine/context] sid=%s userText="%s" pnjIds=%j pnjNames=%j',
+      sid,
+      userText.slice(0, 120),
+      pnjIds,
+      pnjNames
+    );
+
     const sess = await getOrInitSession(sid);
 
-    const lastHashes = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies.slice(-3) : [];
-    const token = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    const lastHashes = Array.isArray(sess.data.lastReplies)
+      ? sess.data.lastReplies.slice(-3)
+      : [];
+    const token =
+      Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+
+    // ... ici tu continues avec ta partie "résolution PNJ" qu’on a écrite
+  } catch (e) {
+    console.error('engine/context error:', e);
+    res.status(500).json({ message: 'engine/context error' });
+  }
+});
+
 
     // ========= 1. résolution PNJ (ids, noms, ou détection auto) =========
     let pnjs = [];
@@ -1173,6 +1197,10 @@ app.post('/api/engine/context', async (req, res) => {
       // si on reçoit un ou plusieurs noms → on essaie de les résoudre
       const raw = String(pnjNames[0] || '').trim();
       if (raw) {
+        log('Recherche PNJ par nom', raw);
+
+
+  
         let rows = [];
         try {
           rows = (await pool.query(
@@ -1318,6 +1346,9 @@ app.post('/api/engine/context', async (req, res) => {
     // on fabrique les cartes compactes
     const pnjCards = pnjs.slice(0, 8).map(compactCard);
 
+    log('PNJ retenus pour la scène', pnjs.slice(0, 8).map(p => ({ id: p.id, name: p.name })));
+
+
     // on garde les dossiers de continuité
     sess.data.dossiersById = sess.data.dossiersById || {};
     for (const p of pnjs.slice(0, 8)) {
@@ -1326,6 +1357,8 @@ app.post('/api/engine/context', async (req, res) => {
     // on garde pour le tour suivant
     sess.data.lastPnjCards = pnjCards;
     await saveSession(sid, sess.data);
+    log('Session sauvegardée', sid);
+
 
     const dossiers = pnjs.map(p => sess.data.dossiersById[p.id]).filter(Boolean);
 
@@ -1597,6 +1630,7 @@ app.get('/api/ping', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
