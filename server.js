@@ -1154,7 +1154,6 @@ app.post('/api/engine/refresh', async (req, res) => {
 });
 
 // CONTEXT (tour de jeu) — version avec PNJ_ACTIFS / PNJ_SECOND_PLAN
-// CONTEXT (tour de jeu) — version avec PNJ_ACTIFS / PNJ_SECOND_PLAN
 app.post('/api/engine/context', async (req, res) => {
   let sid = 'default';
   try {
@@ -1180,14 +1179,6 @@ app.post('/api/engine/context', async (req, res) => {
     const token =
       Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
-    // ... ici tu continues avec ta partie "résolution PNJ" qu’on a écrite
-  } catch (e) {
-    console.error('engine/context error:', e);
-    res.status(500).json({ message: 'engine/context error' });
-  }
-});
-
-
     // ========= 1. résolution PNJ (ids, noms, ou détection auto) =========
     let pnjs = [];
     if (pnjIds.length) {
@@ -1199,8 +1190,6 @@ app.post('/api/engine/context', async (req, res) => {
       if (raw) {
         log('Recherche PNJ par nom', raw);
 
-
-  
         let rows = [];
         try {
           rows = (await pool.query(
@@ -1348,7 +1337,6 @@ app.post('/api/engine/context', async (req, res) => {
 
     log('PNJ retenus pour la scène', pnjs.slice(0, 8).map(p => ({ id: p.id, name: p.name })));
 
-
     // on garde les dossiers de continuité
     sess.data.dossiersById = sess.data.dossiersById || {};
     for (const p of pnjs.slice(0, 8)) {
@@ -1358,7 +1346,6 @@ app.post('/api/engine/context', async (req, res) => {
     sess.data.lastPnjCards = pnjCards;
     await saveSession(sid, sess.data);
     log('Session sauvegardée', sid);
-
 
     const dossiers = pnjs.map(p => sess.data.dossiersById[p.id]).filter(Boolean);
 
@@ -1426,7 +1413,7 @@ Format attendu:
 
 _Notes MJ (courtes)_: [événements | verrous | xp]`;
 
-    // on n’incrémente pas ici le tour (tu le fais peut-être au commit)
+    // on n’incrémente pas ici le tour (tu peux le faire ailleurs si tu veux)
     return res.status(200).json({
       guard: { antiLoop: { token, lastHashes }, rules, style },
       pnjCards,
@@ -1446,8 +1433,6 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
     });
   }
 });
-
-
 
 // =================== STYLE & CONTENT SETTINGS ===================
 // ← ICI on modifie pour que ça enregistre aussi en DB
@@ -1622,6 +1607,7 @@ app.post('/api/backup/restore', async (req, res) => {
     res.status(500).json({ message: 'DB error' });
   }
 });
+
 app.get('/api/ping', (req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
@@ -1630,7 +1616,3 @@ app.get('/api/ping', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
-
-
-
-
