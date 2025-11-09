@@ -1044,10 +1044,52 @@ async function loadPnjsByIds(ids = []) {
   return out;
 }
 
+// ====== AJOUT : emojis décoratifs sans toucher la DB ======
+
+// petit hash déterministe pour avoir toujours le même résultat à partir d'une chaîne
+function hashToInt(str) {
+  const s = String(str || '');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  }
+  return h;
+}
+
+// sélection d'emoji décoratifs
+const DECOR_EMOJIS = [
+  '🙂','😏','😠','🤔','🤗','😇','😎','🤨','🥴','🤡',
+  '🔥','⚔️','❄️','🌸','🦊','🐉','🦋','🛡️','📜','💫'
+];
+
+// génère un emoji en fonction du pnj SANS écrire en base
+function decorateEmojiForPnj(p) {
+  const traits = Array.isArray(p.personalityTraits) ? p.personalityTraits.map(t => t.toLowerCase()) : [];
+  const name = p.name || p.id || 'pnj';
+
+  if (traits.some(t => t.includes('feu') || t.includes('colère') || t.includes('dragon'))) {
+    return '🔥';
+  }
+  if (traits.some(t => t.includes('froid') || t.includes('glace') || t.includes('calme'))) {
+    return '❄️';
+  }
+  if (traits.some(t => t.includes('noble') || t.includes('royal') || t.includes('princesse'))) {
+    return '🦋';
+  }
+  if (traits.some(t => t.includes('farceur') || t.includes('espiègle') || t.includes('voleur'))) {
+    return '😏';
+  }
+
+  const h = hashToInt(name);
+  const idx = h % DECOR_EMOJIS.length;
+  return DECOR_EMOJIS[idx];
+}
+
 function compactCard(p) {
   return {
     id: p.id,
     name: p.name,
+    emoji: decorateEmojiForPnj(p), // ← ajout
     appearance: p.appearance,
     personalityTraits: p.personalityTraits,
     backstoryHint: (p.backstory || '').split('\n').slice(-2).join(' ').slice(0, 300),
@@ -1069,6 +1111,37 @@ function continuityDossier(p) {
         : null,
       p.locationId ? `Loc: ${p.locationId}` : null
     ].filter(Boolean)
+  };
+}
+
+// ====== AJOUT : vérifier / rafraîchir jusqu'à 50 PNJ en session ======
+async function hydrateSessionPnjs(sess) {
+  sess.data = sess.data || {};
+  sess.data.dossiersById = sess.data.dossiersById || {};
+
+  const knownIds = Object.keys(sess.data.dossiersById);
+  const idsToLoad = knownIds.slice(0, 50);
+
+  if (!idsToLoad.length) {
+    return { loaded: 0, missing: [] };
+  }
+
+  const r = await pool.query('SELECT data FROM pnjs WHERE id = ANY($1::text[])', [idsToLoad]);
+  const rows = r.rows || [];
+
+  const foundIds = new Set();
+  for (const row of rows) {
+    const p = row.data;
+    if (!p || !p.id) continue;
+    foundIds.add(p.id);
+    sess.data.dossiersById[p.id] = continuityDossier(p);
+  }
+
+  const missing = idsToLoad.filter(id => !foundIds.has(id));
+
+  return {
+    loaded: rows.length,
+    missing
   };
 }
 
@@ -1172,6 +1245,12 @@ app.post('/api/engine/context', async (req, res) => {
     );
 
     const sess = await getOrInitSession(sid);
+
+    // 👇 AJOUT : vérifier les fiches déjà en session (max 50)
+    const sessionCheck = await hydrateSessionPnjs(sess);
+    if (sessionCheck.missing.length) {
+      log('PNJ manquants en DB mais présents en session:', sessionCheck.missing);
+    }
 
     const lastHashes = Array.isArray(sess.data.lastReplies)
       ? sess.data.lastReplies.slice(-3)
@@ -1369,12 +1448,11 @@ app.post('/api/engine/context', async (req, res) => {
       contentGuard
     ].join(' ');
 
-    const roster = pnjCards.map(c => `${c.name}#${c.id}`).join(', ');
+    const roster = pnjCards.map(c => `${c.emoji || '🙂'} ${c.name}#${c.id}`).join(', ');
     const anchors = dossiers
       .map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`)
       .join('\n');
 
-    // ========= 8. systemHint final =========
     const systemHint =
 `STYLE (OBLIGATOIRE): ${style}
 
@@ -1384,10 +1462,10 @@ Tour: ${Number(sess.data.turn || 0) + 1}
 AntiLoopToken: ${token}
 
 PNJ_ACTIFS (à faire parler dans cette scène):
-${activePnjs.map(c => `- ${c.name}#${c.id} | traits=${JSON.stringify(c.personalityTraits || [])} | locked=${JSON.stringify(c.lockedTraits || [])}`).join('\n')}
+${activePnjs.map(c => `- ${c.emoji || '🙂'} ${c.name}#${c.id} | traits=${JSON.stringify(c.personalityTraits || [])} | locked=${JSON.stringify(c.lockedTraits || [])}`).join('\n')}
 
 PNJ_SECOND_PLAN (présents, réactions brèves autorisées):
-${backgroundPnjs.length ? backgroundPnjs.map(c => `- ${c.name}#${c.id}`).join('\n') : '(aucun)'}
+${backgroundPnjs.length ? backgroundPnjs.map(c => `- ${c.emoji || '🙂'} ${c.name}#${c.id}`).join('\n') : '(aucun)'}
 
 ROSTER COMPLET: ${roster}
 
@@ -1398,6 +1476,7 @@ Do/Don't: ${rules}
 
 PNJ cards détaillées:
 ${pnjCards.map(c => `- ${c.name}#${c.id}
+  emoji: ${c.emoji || '🙂'}
   traits: ${JSON.stringify(c.personalityTraits || [])}
   locked: ${JSON.stringify(c.lockedTraits || [])}
   backstoryHint: ${c.backstoryHint || '(n/a)'}
@@ -1405,15 +1484,26 @@ ${pnjCards.map(c => `- ${c.name}#${c.id}
   location: ${c.locationId || '(n/a)'}
 `).join('\n')}
 
-Format attendu:
+FORMAT DE RÉPONSE (IMPORTANT) :
+- Toujours écrire la scène en BLOCS séparés par PNJ.
+- Pour chaque PNJ actif :
+  **${'${emoji}'} NomPNJ** *(émotion ou attitude courte)*
+  Texte du PNJ sur 1 à 4 phrases.
+- Ligne vide entre chaque PNJ.
+- Les PNJ de second plan peuvent avoir une réplique ultra courte.
+
+Exemple de rendu attendu :
+
 # [Lieu] — [Date/Heure]
 
-**🙂 NomPNJ** *(émotion)*
-**Réplique en gras...**
+**🙂 Rimuru** *(calme)*
+**Alors, vous êtes tous là...** Nous pouvons discuter de la mission. Je veux un compte-rendu clair.
 
-_Notes MJ (courtes)_: [événements | verrous | xp]`;
+**🔥 Milim** *(surexcitée)*
+**Ouais ! On va se battre ?!** Dis, dis, dis !
 
-    // on n’incrémente pas ici le tour (tu peux le faire ailleurs si tu veux)
+_Notes MJ (courtes)_: Rimuru reste leader. Milim très énergique. Pas de changement d’identité.`;
+
     return res.status(200).json({
       guard: { antiLoop: { token, lastHashes }, rules, style },
       pnjCards,
@@ -1435,7 +1525,6 @@ _Notes MJ (courtes)_: [événements | verrous | xp]`;
 });
 
 // =================== STYLE & CONTENT SETTINGS ===================
-// ← ICI on modifie pour que ça enregistre aussi en DB
 app.post('/api/style', async (req, res) => {
   try {
     const body = req.body || {};
