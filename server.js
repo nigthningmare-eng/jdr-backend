@@ -1772,11 +1772,25 @@ app.post('/api/backup/restore', async (req, res) => {
 app.get('/api/ping', (req, res) => {
   res.json({ ok: true, ts: new Date().toISOString() });
 });
+app.get('/', (req, res) => {
+  res.json({
+    ok: true,
+    message: 'JDR backend est en ligne 🚀',
+    endpoints: [
+      '/api/ping',
+      '/api/db/health',
+      '/api/pnjs',
+      '/api/engine/context',
+      '/api/engine/commit'
+    ]
+  });
+});
 
 // ---------------- Lancement ----------------
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
