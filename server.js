@@ -1453,76 +1453,72 @@ app.post('/api/engine/context', async (req, res) => {
       .map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`)
       .join('\n');
 
-    const systemHint =
-`STYLE (OBLIGATOIRE): ${style}
+// ========= 8. systemHint final (Style VN immersif) =========
+const headerMeta = `🌩️ [Lieu] — [Date/Heure] — [Météo]\n`; // le modèle remplira
+const allowedNames = pnjCards.map(c => c.name);
+
+const systemHint = `
+STYLE (OBLIGATOIRE): ${style}
+Le style doit être un **Visual Novel immersif et interactif**, proche de l'exemple fourni (gros titre, PNJ un par un, répliques dialoguées). Les PNJ viennent de la base de données du MJ et leurs fiches font foi. Ne JAMAIS contredire une relation ou un trait présent dans les dossiers.
 
 [ENGINE CONTEXT]
 ${memo}Session: ${sid}
 Tour: ${Number(sess.data.turn || 0) + 1}
 AntiLoopToken: ${token}
 
-PNJ_ACTIFS (à faire parler dans cette scène):
-${activePnjs.map(c => `- ${c.emoji || '🙂'} ${c.name}#${c.id} | traits=${JSON.stringify(c.personalityTraits || [])} | locked=${JSON.stringify(c.lockedTraits || [])}`).join('\n')}
+PNJ_ACTIFS (à faire parler dans cette scène, dans cet ordre):
+${activePnjs.map(c => `- ${c.emoji || '🙂'} ${c.name}#${c.id}`).join('\n')}
 
 PNJ_SECOND_PLAN (présents, réactions brèves autorisées):
 ${backgroundPnjs.length ? backgroundPnjs.map(c => `- ${c.emoji || '🙂'} ${c.name}#${c.id}`).join('\n') : '(aucun)'}
 
-ROSTER COMPLET: ${roster}
+ROSTER COMPLET:
+${pnjCards.map(c => `${c.emoji || '🙂'} ${c.name}#${c.id}`).join(', ')}
 
-ANCHORS (continuité):
+ANCHORS (continuité, à respecter AVANT d'écrire):
 ${anchors}
 
-Do/Don't: ${rules}
+CONTRAINTE PNJ (PRIORITÉ 1):
+- Tu n’as le droit de faire parler QUE les PNJ listés ci-dessus.
+- PNJ non listé = décor muet (ne pas inventer Tifa, Mirajane, etc. si elles ne sont pas dans la liste).
+- Si une fiche indique "pas de lien de parenté" ou une relation précise, tu la respectes.
+- Ne pas fusionner les identités.
+- lockedTraits sont prioritaires.
 
-PNJ cards détaillées:
-${pnjCards.map(c => `- ${c.name}#${c.id}
-  emoji: ${c.emoji || '🙂'}
-  traits: ${JSON.stringify(c.personalityTraits || [])}
-  locked: ${JSON.stringify(c.lockedTraits || [])}
-  backstoryHint: ${c.backstoryHint || '(n/a)'}
-  skills: ${JSON.stringify(c.skills || [])}
-  location: ${c.locationId || '(n/a)'}
-`).join('\n')}
+FORMAT VISUAL NOVEL (PRIORITÉ 2):
+1. Commencer par un en-tête comme dans l’exemple:
+   "🌩️ AxeL — Taverne du Repos Écarlate 🌩️ — Matin orageux (GMT+1)"
+   ou
+   "🏫 Lieu : Xyrus Academy — 🕒 15h24 — ☀️ Temps : Chaud"
+2. Ensuite, pour CHAQUE PNJ ACTIF, écrire exactement ce patron :
 
-FORMAT DE RÉPONSE (IMPORTANT) :
-- Toujours écrire la scène en BLOCS séparés par PNJ.
-- Pour chaque PNJ actif :
-  **${'${emoji}'} NomPNJ** *(émotion ou attitude courte)*
-  Texte du PNJ sur 1 à 4 phrases.
-- Ligne vide entre chaque PNJ.
-- Les PNJ de second plan peuvent avoir une réplique ultra courte.
+**${'${emoji}'} ${'${NomPNJ}'} ${'${emoji}'}** *(${ '${émotion / réaction courte}' })*
+**${'${Réplique du PNJ (1 à 4 phrases) '}'}**
 
-Exemple de rendu attendu :
+3. Laisser UNE LIGNE VIDE entre chaque PNJ.
+4. Les PNJ de second plan peuvent avoir 1 phrase max, même format.
+5. Pas de "voix de ...", pas de personnages hors liste.
 
-# [Lieu] — [Date/Heure]
+EXEMPLE DE FORMAT ATTENDU (à IMITER) :
+🌩️ AxeL — Taverne du Repos Écarlate 🌩️ — Matin orageux, rafales de vent
 
-**🙂 Rimuru** *(calme)*
-**Alors, vous êtes tous là...** Nous pouvons discuter de la mission. Je veux un compte-rendu clair.
+**🌸 Kazuma Satou 🌸** *(triomphant, bras croisés)*
+**"Donc là, j’agrippe la nuque du Roi-Démon..."**
 
-**🔥 Milim** *(surexcitée)*
-**Ouais ! On va se battre ?!** Dis, dis, dis !
+**😏 Elysia Cyrène Herrscher 😏** *(amusée)*
+**"Tu racontes ça avec tellement de panache..."**
 
-_Notes MJ (courtes)_: Rimuru reste leader. Milim très énergique. Pas de changement d’identité.`;
+[... suites de PNJ dans le même format ...]
 
-    return res.status(200).json({
-      guard: { antiLoop: { token, lastHashes }, rules, style },
-      pnjCards,
-      dossiers,
-      systemHint,
-      turn: Number(sess.data.turn || 0) + 1
-    });
-  } catch (e) {
-    console.error('engine/context error:', e);
-    return res.status(500).json({
-      guard: { antiLoop: { token: null, lastHashes: [] }, rules: '', style: '' },
-      pnjCards: [],
-      dossiers: [],
-      systemHint: '',
-      turn: 0,
-      error: 'engine/context error'
-    });
-  }
-});
+BLOC INTERACTIF (fin facultative) :
+"🎮 Que fais-tu ?"
+"1️⃣ ..."
+"2️⃣ ..."
+"3️⃣ ..."
+
+Ne jamais écrire "La scène a été jouée." — écrire la scène complète.
+`.trim();
+
 
 // =================== STYLE & CONTENT SETTINGS ===================
 app.post('/api/style', async (req, res) => {
@@ -1705,3 +1701,4 @@ app.get('/api/ping', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
