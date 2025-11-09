@@ -1521,6 +1521,80 @@ app.post('/api/engine/context', async (req, res) => {
   }
 });
 
+// (Étape 2) Commit de la scène générée par le modèle
+app.post('/api/engine/commit', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const sid = String(body.sid || 'default');
+    const modelReply = String(body.modelReply || '').trim();
+    const notes = String(body.notes || '').trim();
+    const pnjUpdates = Array.isArray(body.pnjUpdates) ? body.pnjUpdates : [];
+    const lock = body.lock || null;
+
+    const sess = await getOrInitSession(sid);
+    sess.data = sess.data || {};
+
+    // historiser la dernière réponse du modèle (pour anti-loop)
+    sess.data.lastReplies = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies : [];
+    if (modelReply) {
+      const fp = fingerprint(modelReply);
+      sess.data.lastReplies.push(fp);
+      if (sess.data.lastReplies.length > 10) {
+        sess.data.lastReplies = sess.data.lastReplies.slice(-10);
+      }
+    }
+
+    // notes MJ
+    sess.data.notes = Array.isArray(sess.data.notes) ? sess.data.notes : [];
+    if (notes) {
+      sess.data.notes.push(notes);
+      if (sess.data.notes.length > 50) {
+        sess.data.notes = sess.data.notes.slice(-50);
+      }
+    }
+
+    // éventuels updates PNJ envoyés par le client
+    if (pnjUpdates.length) {
+      for (const upd of pnjUpdates) {
+        const id = String(upd.id || '').trim();
+        const patch = upd.patch || {};
+        if (!id) continue;
+        const r = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
+        if (!r.rows.length) continue;
+        const current = r.rows[0].data;
+        const merged = deepMerge(current, patch);
+        await pool.query(
+          'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
+          [id, JSON.stringify(merged)]
+        );
+      }
+    }
+
+    // lock de traits depuis le client
+    if (lock && lock.id && Array.isArray(lock.fields) && lock.fields.length) {
+      const id = String(lock.id);
+      const r = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
+      if (r.rows.length) {
+        const p = r.rows[0].data;
+        const set = new Set(p.lockedTraits || []);
+        for (const f of lock.fields) set.add(String(f));
+        p.lockedTraits = Array.from(set);
+        await pool.query(
+          'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
+          [id, JSON.stringify(p)]
+        );
+      }
+    }
+
+    // sauver la session
+    await saveSession(sid, sess.data);
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error('/api/engine/commit error:', err);
+    return res.status(500).json({ ok: false, message: 'commit failed' });
+  }
+});
 
 // =================== STYLE & CONTENT SETTINGS ===================
 app.post('/api/style', async (req, res) => {
@@ -1703,6 +1777,7 @@ app.get('/api/ping', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
