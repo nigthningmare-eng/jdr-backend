@@ -1432,32 +1432,33 @@ app.post('/api/engine/context', async (req, res) => {
     const activePnjs = pnjCards.slice(0, 3);   // ceux qui parlent
     const backgroundPnjs = pnjCards.slice(3);  // présents, bruits, réactions
 
-    // ========= 7. règles MJ + style =========
-    const rules = [
-      'Toujours respecter lockedTraits.',
-      "Ne jamais changer l'identité d'un PNJ (nom, race, relations clés).",
-      'Évite les répétitions des 2 dernières répliques.',
-      'Interdit d’écrire seulement “La scène a été jouée/enregistrée.” — écrire la scène complète.',
-      'Les PNJ de second plan peuvent réagir brièvement si c’est logique.'
-    ].join(' ');
+// ========= 7. règles MJ + style =========
+const rules = [
+  'Toujours respecter lockedTraits.',
+  "Ne jamais changer l'identité d'un PNJ (nom, race, relations clés).",
+  'Évite les répétitions des 2 dernières répliques.',
+  'Interdit d’écrire seulement “La scène a été jouée/enregistrée.” — écrire la scène complète.',
+  'Les PNJ de second plan peuvent réagir brièvement si c’est logique.'
+].join(' ');
 
-    const styleText = String(narrativeStyle?.styleText || '').trim();
-    const contentGuard = `Niveau contenu: ${contentSettings?.explicitLevel || 'mature'} (pas de détails graphiques).`;
-    const style = [
-      styleText || 'Light novel isekai, sobre, immersif.',
-      contentGuard
-    ].join(' ');
+const styleText = String(narrativeStyle?.styleText || '').trim();
+const contentGuard = `Niveau contenu: ${contentSettings?.explicitLevel || 'mature'} (pas de détails graphiques).`;
+const style = [
+  styleText || 'Light novel isekai, sobre, immersif.',
+  contentGuard
+].join(' ');
 
-    const roster = pnjCards.map(c => `${c.emoji || '🙂'} ${c.name}#${c.id}`).join(', ');
-    const anchors = dossiers
-      .map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`)
-      .join('\n');
+const roster = pnjCards.map(c => `${c.emoji || '🙂'} ${c.name}#${c.id}`).join(', ');
+const anchors = dossiers
+  .map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`)
+  .join('\n');
 
 // ========= 8. systemHint final (Style VN immersif) =========
-const headerMeta = `🌩️ [Lieu] — [Date/Heure] — [Météo]\n`; // le modèle remplira
+const headerMeta = '🌩️ [Lieu] — [Date/Heure] — [Météo]\n'; // le modèle remplira
 const allowedNames = pnjCards.map(c => c.name);
 
 const systemHint = `
+${headerMeta}
 STYLE (OBLIGATOIRE): ${style}
 Le style doit être un **Visual Novel immersif et interactif**, proche de l'exemple fourni (gros titre, PNJ un par un, répliques dialoguées). Les PNJ viennent de la base de données du MJ et leurs fiches font foi. Ne JAMAIS contredire une relation ou un trait présent dans les dossiers.
 
@@ -1480,7 +1481,7 @@ ${anchors}
 
 CONTRAINTE PNJ (PRIORITÉ 1):
 - Tu n’as le droit de faire parler QUE les PNJ listés ci-dessus.
-- PNJ non listé = décor muet (ne pas inventer Tifa, Mirajane, etc. si elles ne sont pas dans la liste).
+- PNJ non listé = décor muet (ne pas inventer de personnages hors liste).
 - Si une fiche indique "pas de lien de parenté" ou une relation précise, tu la respectes.
 - Ne pas fusionner les identités.
 - lockedTraits sont prioritaires.
@@ -1492,8 +1493,8 @@ FORMAT VISUAL NOVEL (PRIORITÉ 2):
    "🏫 Lieu : Xyrus Academy — 🕒 15h24 — ☀️ Temps : Chaud"
 2. Ensuite, pour CHAQUE PNJ ACTIF, écrire exactement ce patron :
 
-**${'${emoji}'} ${'${NomPNJ}'} ${'${emoji}'}** *(${ '${émotion / réaction courte}' })*
-**${'${Réplique du PNJ (1 à 4 phrases) '}'}**
+**\${emoji} \${nomPNJ} \${emoji}** *(\${émotion_ou_réaction_courte})*
+**"\${réplique_du_PNJ (1 à 4 phrases)}"**
 
 3. Laisser UNE LIGNE VIDE entre chaque PNJ.
 4. Les PNJ de second plan peuvent avoir 1 phrase max, même format.
@@ -1508,16 +1509,19 @@ EXEMPLE DE FORMAT ATTENDU (à IMITER) :
 **😏 Elysia Cyrène Herrscher 😏** *(amusée)*
 **"Tu racontes ça avec tellement de panache..."**
 
-[... suites de PNJ dans le même format ...]
-
 BLOC INTERACTIF (fin facultative) :
 "🎮 Que fais-tu ?"
 "1️⃣ ..."
 "2️⃣ ..."
 "3️⃣ ..."
 
+RÈGLES MJ ADDITIONNELLES:
+${rules}
+
 Ne jamais écrire "La scène a été jouée." — écrire la scène complète.
 `.trim();
+
+
 
 
 // =================== STYLE & CONTENT SETTINGS ===================
@@ -1701,4 +1705,5 @@ app.get('/api/ping', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
