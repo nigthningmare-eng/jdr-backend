@@ -1226,7 +1226,7 @@ app.post('/api/engine/refresh', async (req, res) => {
   }
 });
 
-// CONTEXT (tour de jeu) — version avec PNJ_ACTIFS / PNJ_SECOND_PLAN
+// CONTEXT (tour de jeu) — version avec PNJ_ACTIFS / PNJ_SECOND_PLAN / VN
 app.post('/api/engine/context', async (req, res) => {
   let sid = 'default';
   try {
@@ -1243,9 +1243,10 @@ app.post('/api/engine/context', async (req, res) => {
       pnjNames
     );
 
+    // 1) session
     const sess = await getOrInitSession(sid);
 
-    // vérifier / rafraîchir jusqu'à 50 PNJ déjà connus en session
+    // 1bis) rafraîchir jusqu'à 50 PNJ déjà connus en session
     const sessionCheck = await hydrateSessionPnjs(sess);
     if (sessionCheck.missing.length) {
       log('PNJ manquants en DB mais présents en session:', sessionCheck.missing);
@@ -1254,9 +1255,10 @@ app.post('/api/engine/context', async (req, res) => {
     const lastHashes = Array.isArray(sess.data.lastReplies)
       ? sess.data.lastReplies.slice(-3)
       : [];
-    const token = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+    const token =
+      Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
-    // ========= 1. résolution PNJ (ids, noms, ou détection auto) =========
+    // ========= 2. résolution PNJ (ids, noms, ou détection auto) =========
     let pnjs = [];
     if (pnjIds.length) {
       pnjs = await loadPnjsByIds(pnjIds);
@@ -1317,7 +1319,7 @@ app.post('/api/engine/context', async (req, res) => {
         }
       }
     } else {
-      // détection automatique via le texte du joueur
+      // détection auto
       const txt = userText.toLowerCase();
       const tokens = Array.from(new Set(
         txt
@@ -1361,7 +1363,7 @@ app.post('/api/engine/context', async (req, res) => {
       pnjs = rows.map(r => r.data);
     }
 
-    // ========= 2. fusion avec le roster épinglé =========
+    // ========= 3. fusion avec roster épinglé + tour précédent =========
     const pinned = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
     if (pinned.length) {
       const pinnedPnjs = await loadPnjsByIds(pinned);
@@ -1371,7 +1373,6 @@ app.post('/api/engine/context', async (req, res) => {
       }
     }
 
-    // ========= 3. fusion avec les PNJ du tour précédent =========
     const prevCards = Array.isArray(sess.data.lastPnjCards) ? sess.data.lastPnjCards : [];
     if (prevCards.length) {
       const existingIds = new Set(pnjs.map(p => p.id));
@@ -1386,46 +1387,40 @@ app.post('/api/engine/context', async (req, res) => {
       }
     }
 
-    // ========= 4. fallback : si vraiment rien, on prend le roster épinglé =========
+    // fallback
     if (!pnjs.length && pinned.length) {
       pnjs = await loadPnjsByIds(pinned);
     }
 
-    // si ids fournis → on met à jour le roster épinglé
+    // update pinRoster si ids fournis
     const providedIds = Array.isArray(body.pnjIds) ? body.pnjIds.map(String) : [];
     if (providedIds.length) {
       sess.data.pinRoster = providedIds.slice(0, 8);
       await saveSession(sid, sess.data);
     }
 
-    // ========= 5. mémo narratif bref =========
+    // ========= 4. mémo narratif bref =========
     const lastNotes = Array.isArray(sess.data.notes) ? sess.data.notes.slice(-5) : [];
     const memo = lastNotes.length
       ? `\nMEMO (résumés précédents):\n- ${lastNotes.join('\n- ')}\n`
       : '';
 
-    // on fabrique les cartes compactes
+    // ========= 5. cartes compactes =========
     const pnjCards = pnjs.slice(0, 8).map(compactCard);
 
     log('PNJ retenus pour la scène', pnjs.slice(0, 8).map(p => ({ id: p.id, name: p.name })));
 
-    // on garde les dossiers de continuité
+    // continuité
     sess.data.dossiersById = sess.data.dossiersById || {};
     for (const p of pnjs.slice(0, 8)) {
       sess.data.dossiersById[p.id] = continuityDossier(p);
     }
-    // on garde pour le tour suivant
     sess.data.lastPnjCards = pnjCards;
-
-    // incrément du tour dans la session
-    const turn = Number(sess.data.turn || 0) + 1;
-    sess.data.turn = turn;
     await saveSession(sid, sess.data);
-    log('Session sauvegardée', sid);
 
     const dossiers = pnjs.map(p => sess.data.dossiersById[p.id]).filter(Boolean);
 
-    // ========= 6. séparation actifs / second plan =========
+    // ========= 6. actifs / second plan =========
     const activePnjs = pnjCards.slice(0, 3);
     const backgroundPnjs = pnjCards.slice(3);
 
@@ -1445,81 +1440,119 @@ app.post('/api/engine/context', async (req, res) => {
       contentGuard
     ].join(' ');
 
-    const roster = pnjCards.map(c => `${c.emoji || '🙂'} ${c.name}#${c.id}`).join(', ');
     const anchors = dossiers
       .map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`)
       .join('\n');
 
-    // ========= 8. systemHint final (Style VN immersif) =========
-    const headerMeta = '🌩️ [Lieu] — [Date/Heure] — [Météo]';
-    const systemHint = [
-      headerMeta,
-      '',
-      `STYLE (OBLIGATOIRE): ${style}`,
-      'Le style doit être un Visual Novel immersif et interactif, proche de l’exemple fourni (gros titre, PNJ un par un, répliques dialoguées). Les PNJ viennent de la base de données du MJ et leurs fiches font foi. Ne JAMAIS contredire une relation ou un trait présent dans les dossiers.',
-      '',
-      '[ENGINE CONTEXT]',
-      memo ? memo : '',
-      `Session: ${sid}`,
-      `Tour: ${turn}`,
-      `AntiLoopToken: ${token}`,
-      '',
-      'PNJ_ACTIFS (à faire parler dans cette scène, dans cet ordre):',
-      activePnjs.map(c => `- ${c.emoji || '🙂'} ${c.name}#${c.id}`).join('\n') || '(aucun)',
-      '',
-      'PNJ_SECOND_PLAN (présents, réactions brèves autorisées):',
-      backgroundPnjs.length
-        ? backgroundPnjs.map(c => `- ${c.emoji || '🙂'} ${c.name}#${c.id}`).join('\n')
-        : '(aucun)',
-      '',
-      'ROSTER COMPLET:',
-      roster,
-      '',
-      'ANCHORS (continuité, à respecter AVANT d’écrire):',
-      anchors || '(aucun)',
-      '',
-      'CONTRAINTE PNJ (PRIORITÉ 1):',
-      '- Tu n’as le droit de faire parler QUE les PNJ listés ci-dessus.',
-      '- PNJ non listé = décor muet (ne pas inventer de personnages hors liste).',
-      '- Si une fiche indique "pas de lien de parenté" ou une relation précise, tu la respectes.',
-      '- Ne pas fusionner les identités.',
-      '- lockedTraits sont prioritaires.',
-      '',
-      'FORMAT VISUAL NOVEL (PRIORITÉ 2):',
-      '1. En-tête avec lieu / date / météo (comme dans l’exemple).',
-      '2. Pour chaque PNJ ACTIF :',
-      '**${emoji} NomPNJ ${emoji}** *(émotion / réaction courte)*',
-      '**"Dialogue du PNJ (1 à 4 phrases)"**',
-      '3. Une ligne vide entre chaque PNJ.',
-      '4. PNJ de second plan : 1 phrase max.',
-      '',
-      'RÈGLES MJ ADDITIONNELLES:',
-      rules,
-      '',
-      'Ne jamais écrire "La scène a été jouée." — écrire la scène complète.'
-    ].join('\n');
+    // ========= 7bis. PNJ détaillés depuis la DB =========
+    const pnjDetails = pnjs.slice(0, 50).map(p => ({
+      id: p.id,
+      name: p.name,
+      appearance: p.appearance,
+      personalityTraits: p.personalityTraits,
+      backstory: p.backstory,
+      raceName: p.raceName || p.raceId,
+      relations: p.relations || p.relationships || null,
+      locationId: p.locationId,
+      lockedTraits: p.lockedTraits || []
+    }));
 
-    // réponse finale
+    // ========= 8. systemHint final (Style VN immersif + DB) =========
+    const headerMeta = '🌩️ [Lieu] — [Date/Heure] — [Météo]\n';
+    const roster = pnjCards.map(c => `${c.emoji || '🙂'} ${c.name}#${c.id}`).join(', ');
+
+    const systemHint = `
+${headerMeta}
+STYLE (OBLIGATOIRE): ${style}
+Le style doit être un **Visual Novel immersif et interactif**, proche de l'exemple fourni (gros titre, PNJ un par un, répliques dialoguées). Les PNJ viennent de la base de données du MJ et leurs fiches font foi. Ne JAMAIS contredire une relation ou un trait présent dans les dossiers.
+
+[ENGINE CONTEXT]
+${memo}Session: ${sid}
+Tour: ${Number(sess.data.turn || 0) + 1}
+AntiLoopToken: ${token}
+
+PNJ_ACTIFS (à faire parler dans cet ordre):
+${activePnjs.map(c => `- ${c.emoji || '🙂'} ${c.name}#${c.id}`).join('\n')}
+
+PNJ_SECOND_PLAN (présents, réactions brèves autorisées):
+${backgroundPnjs.length ? backgroundPnjs.map(c => `- ${c.emoji || '🙂'} ${c.name}#${c.id}`).join('\n') : '(aucun)'}
+
+ROSTER COMPLET:
+${roster}
+
+ANCHORS (continuité, à respecter AVANT d'écrire):
+${anchors}
+
+PNJ_DETAILS_FROM_DB (à utiliser en priorité si conflit avec les cards):
+${JSON.stringify(pnjDetails, null, 2)}
+
+RÈGLES MJ:
+${rules}
+`.trim();
+
+    // 🔥 Style MJ forcé (Visual Novel complet, jouer la scène)
+    const extraVNHint = `
+Tu es le MJ d’un JDR cross-isekai. Tu DOIS jouer la scène, pas la résumer.
+
+RÈGLE DE MISE EN PAGE (PRIORITÉ 1) :
+- 1 PNJ = 1 bloc.
+- Un bloc = 2 ou 3 lignes max dans cet ordre :
+  1. **{emoji} {NomPNJ} {emoji}** *({émotion / réaction courte})*
+  2. **"Réplique du PNJ (1 à 4 phrases)"**
+  3. (facultatif) une micro-narration de 1 phrase max si c’est vraiment nécessaire.
+- Toujours laisser UNE LIGNE VIDE entre deux blocs de PNJ.
+- Ne jamais mettre deux PNJ dans le même bloc.
+- Ne pas écrire "Voix de ..." ou "À la table d'à côté" si le PNJ n’est pas dans la liste.
+
+FORMAT VISUAL NOVEL OBLIGATOIRE :
+
+**{emoji} {NomPNJ} {emoji}** *({émotion / réaction courte})*
+**"Réplique du PNJ (1 à 4 phrases, fidèle à sa fiche et à PNJ_DETAILS_FROM_DB)"*
+
+(ligne vide)
+
+**{emoji} {AutrePNJ} {emoji}** *({émotion})*
+**"..."**
+
+PNJ_SECOND_PLAN :
+- même format
+- mais 1 seule phrase.
+
+Respect absolu :
+- PNJ listés seulement
+- relations / lockedTraits
+- pas de PNJ inventés
+
+Tu peux finir par :
+_Notes MJ : [tension, PNJ retiré, météo, info captée en secret]_
+`.trim();
+
+    const fullSystemHint = `${systemHint}\n\n${extraVNHint}`;
+
     return res.status(200).json({
       guard: { antiLoop: { token, lastHashes }, rules, style },
       pnjCards,
       dossiers,
-      systemHint,
-      turn
+      pnjDetails,
+      systemHint: fullSystemHint,
+      turn: Number(sess.data.turn || 0) + 1
     });
-
   } catch (e) {
     console.error('engine/context error:', e);
     return res.status(500).json({
       guard: { antiLoop: { token: null, lastHashes: [] }, rules: '', style: '' },
       pnjCards: [],
       dossiers: [],
+      pnjDetails: [],
       systemHint: '',
       turn: 0,
       error: 'engine/context error'
     });
   }
 });
+
+
+
 
 // (Étape 2) Commit de la scène générée par le modèle
 app.post('/api/engine/commit', async (req, res) => {
@@ -1790,6 +1823,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
