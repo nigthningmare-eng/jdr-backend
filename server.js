@@ -1464,7 +1464,7 @@ app.post('/api/engine/context', async (req, res) => {
     const systemHint = `
 ${headerMeta}
 STYLE (OBLIGATOIRE): ${style}
-Le style doit être un **Visual Novel immersif et interactif**, proche de l'exemple fourni (gros titre, PNJ un par un, répliques dialoguées). Les PNJ viennent de la base de données du MJ et leurs fiches font foi. Ne JAMAIS contredire une relation ou un trait présent dans les dossiers.
+Le style doit être un **Visual Novel immersif et interactif**, avec blocs séparés, exactement comme dans l’exemple. Les PNJ viennent de la base de données du MJ et leurs fiches font foi. Ne JAMAIS contredire une relation ou un trait présent dans PNJ_DETAILS_FROM_DB.
 
 [ENGINE CONTEXT]
 ${memo}Session: ${sid}
@@ -1483,7 +1483,7 @@ ${roster}
 ANCHORS (continuité, à respecter AVANT d'écrire):
 ${anchors}
 
-PNJ_DETAILS_FROM_DB (à utiliser en priorité si conflit avec les cards):
+PNJ_DETAILS_FROM_DB (prioritaire si conflit):
 ${JSON.stringify(pnjDetails, null, 2)}
 
 RÈGLES MJ:
@@ -1492,39 +1492,41 @@ ${rules}
 
     // 🔥 Style MJ forcé (Visual Novel complet, jouer la scène)
     const extraVNHint = `
-Tu es le MJ d’un JDR cross-isekai. Tu DOIS jouer la scène, pas la résumer.
+TU DOIS PRODUIRE LA SCÈNE, PAS LA RÉSUMER.
 
-RÈGLE DE MISE EN PAGE (PRIORITÉ 1) :
-- 1 PNJ = 1 bloc.
-- Un bloc = 2 ou 3 lignes max dans cet ordre :
-  1. **{emoji} {NomPNJ} {emoji}** *({émotion / réaction courte})*
-  2. **"Réplique du PNJ (1 à 4 phrases)"**
-  3. (facultatif) une micro-narration de 1 phrase max si c’est vraiment nécessaire.
-- Toujours laisser UNE LIGNE VIDE entre deux blocs de PNJ.
-- Ne jamais mettre deux PNJ dans le même bloc.
-- Ne pas écrire "Voix de ..." ou "À la table d'à côté" si le PNJ n’est pas dans la liste.
+FORMAT VISUAL NOVEL STRICT (OBLIGATOIRE) :
+- 1 PNJ = 1 BLOC séparé par UNE LIGNE VIDE.
+- Chaque bloc commence par le nom du PNJ **en gras** avec un emoji AVANT et APRÈS le nom.
+- Si le PNJ n'a pas d'emoji dans les données, choisis-en un dans cette liste: 🙂 😏 🤔 🤨 🤗 🔥 ❄️ 🌸 🐉 🛡️ 📜 💫
+- Après le nom : les émotions / attitudes entre *italiques*.
+- Ensuite : la réplique du PNJ en gras entre guillemets.
+- INTERDICTION d’écrire plusieurs PNJ dans le même bloc.
+- INTERDICTION de faire parler un PNJ non listé.
 
-FORMAT VISUAL NOVEL OBLIGATOIRE :
+TEMPLATE À SUIVRE MOT À MOT :
 
 **{emoji} {NomPNJ} {emoji}** *({émotion / réaction courte})*
-**"Réplique du PNJ (1 à 4 phrases, fidèle à sa fiche et à PNJ_DETAILS_FROM_DB)"*
+**"{réplique du PNJ (1 à 4 phrases), fidèle à sa fiche}"**
 
 (ligne vide)
 
-**{emoji} {AutrePNJ} {emoji}** *({émotion})*
-**"..."**
+Exemple :
 
-PNJ_SECOND_PLAN :
-- même format
-- mais 1 seule phrase.
+**🌸 Kazuma Satou 🌸** *(triomphant, bras croisés)*
+**"Donc là, j’ai attrapé le roi-démon..."**
 
-Respect absolu :
-- PNJ listés seulement
-- relations / lockedTraits
-- pas de PNJ inventés
+**😏 Megumin 😏** *(offusquée)*
+**"Arrête de mentir, c’est moi qui ai lancé Explosion !"**
 
-Tu peux finir par :
-_Notes MJ : [tension, PNJ retiré, météo, info captée en secret]_
+Pour les PNJ de second plan : même format mais 1 phrase max.
+
+À LA FIN tu peux ajouter :
+_Notes MJ : ..._
+
+RAPPEL IMPORTANT :
+- Utiliser UNIQUEMENT les PNJ listés dans PNJ_ACTIFS ou PNJ_SECOND_PLAN.
+- Respecter les relations indiquées dans PNJ_DETAILS_FROM_DB (pas d’inventions de fratries, mariages, etc.).
+- Si le joueur a déjà commencé la scène, tu la poursuis dans ce format, tu ne la réécris pas.
 `.trim();
 
     const fullSystemHint = `${systemHint}\n\n${extraVNHint}`;
@@ -1537,6 +1539,7 @@ _Notes MJ : [tension, PNJ retiré, météo, info captée en secret]_
       systemHint: fullSystemHint,
       turn: Number(sess.data.turn || 0) + 1
     });
+
   } catch (e) {
     console.error('engine/context error:', e);
     return res.status(500).json({
@@ -1823,6 +1826,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
