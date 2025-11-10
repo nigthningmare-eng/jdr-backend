@@ -1234,28 +1234,28 @@ app.post('/api/engine/context', async (req, res) => {
     sid = body.sid || 'default';
     const userText = String(body.userText || '');
 
-    // ce que le client envoie déjà
+    // 0) ce que le client envoie déjà
     const pnjIds = Array.isArray(body.pnjIds) ? body.pnjIds : [];
     const pnjNamesFromClient = Array.isArray(body.pnjNames)
       ? body.pnjNames
       : (body.name ? [String(body.name)] : []);
 
-    // 🔥 détection dans le texte MJ
+    // 0bis) détection de noms dans le texte
     const mentioned = [];
     const nameRegex = /\b([A-ZÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸ][\w’'\-]+(?:\s+[A-ZÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸ][\w’'\-]+)*)\b/g;
     let m;
     while ((m = nameRegex.exec(userText)) !== null) {
       const raw = m[1].trim();
-      // petit filtre pour éviter les mots de décor
       if (raw.length < 3) continue;
       if (['Le','La','Les','Un','Une','Des','Dans','Et','Mais','Alors','Royaume','Cité','Académie'].includes(raw)) continue;
       mentioned.push(raw);
     }
 
-    // fusion client + détection
-    const nameSet = new Set(pnjNamesFromClient);
-    for (const n of mentioned) nameSet.add(n);
-    const allPnjNames = Array.from(nameSet);
+    // on fusionne client + détection
+    const allPnjNames = Array.from(new Set([
+      ...pnjNamesFromClient,
+      ...mentioned
+    ].map(n => String(n).trim()).filter(Boolean)));
 
     console.log('[engine/context] sid=%s userText="%s" pnjIds=%j pnjNames=%j (auto=%j)',
       sid,
@@ -1268,7 +1268,7 @@ app.post('/api/engine/context', async (req, res) => {
     // 1) session
     const sess = await getOrInitSession(sid);
 
-    // 1bis) rafraîchir jusqu'à 50 PNJ déjà connus en session
+    // 1bis) rafraîchir les PNJ connus
     const sessionCheck = await hydrateSessionPnjs(sess);
     if (sessionCheck.missing.length) {
       log('PNJ manquants en DB mais présents en session:', sessionCheck.missing);
@@ -1280,128 +1280,103 @@ app.post('/api/engine/context', async (req, res) => {
     const token =
       Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
 
-  
+    // 2) RÉSOLUTION PNJ
+    let pnjs = [];
 
+    if (pnjIds.length) {
+      // priorité aux ids envoyés
+      pnjs = await loadPnjsByIds(pnjIds);
+    } else if (allPnjNames.length) {
+      // on essaie de résoudre TOUS les noms trouvés
+      const found = [];
+      for (const rawName of allPnjNames) {
+        const raw = String(rawName || '').trim();
+        if (!raw) continue;
 
-// ========= 2. résolution PNJ (ids, noms, ou détection auto) =========
+        let rows = [];
 
-// ce que t'envoie le client
-const pnjIds = Array.isArray(body.pnjIds) ? body.pnjIds : [];
-const pnjNamesFromBody = Array.isArray(body.pnjNames)
-  ? body.pnjNames
-  : (body.name ? [String(body.name)] : []);
+        // exact
+        try {
+          rows = (await pool.query(
+            `SELECT data FROM pnjs
+             WHERE trim(lower(data->>'name')) = trim(lower($1))
+             LIMIT 1`,
+            [raw]
+          )).rows;
+        } catch {}
 
-// 🆕 on essaie d'extraire des noms depuis le userText
-const mentionNames = [];
-if (userText) {
-  const re = /([A-ZÉÈÀÂÎÔÛÇ][a-zàâçéèêëîïôùûüÿñœ]+(?:\s+[A-ZÉÈÀÂÎÔÛÇ][a-zàâçéèêëîïôùûüÿñœ]+)*)/g;
-  let m;
-  const stopWords = ['Le','La','Les','Et','Mais','Donc','Alors','Une','Un','Au','Aux','Du','De','Des'];
-  while ((m = re.exec(userText)) !== null) {
-    const candidate = m[1].trim();
-    if (!stopWords.includes(candidate)) {
-      mentionNames.push(candidate);
+        // prefix
+        if (!rows.length) {
+          try {
+            rows = (await pool.query(
+              `SELECT data FROM pnjs
+               WHERE lower(data->>'name') LIKE lower($1)
+               ORDER BY data->>'name'
+               LIMIT 5`,
+              [raw.replace(/\s+/g,' ').trim() + '%']
+            )).rows;
+          } catch {}
+        }
+
+        // contains
+        if (!rows.length) {
+          try {
+            rows = (await pool.query(
+              `SELECT data FROM pnjs
+               WHERE lower(data->>'name') LIKE lower($1)
+               ORDER BY data->>'name'
+               LIMIT 3`,
+              [`%${raw}%`]
+            )).rows;
+          } catch {}
+        }
+
+        if (rows.length) {
+          found.push(rows[0].data);
+        }
+      }
+
+      // dédupe par id
+      const seen = new Set();
+      pnjs = found.filter(p => {
+        if (!p?.id) return false;
+        if (seen.has(p.id)) return false;
+        seen.add(p.id);
+        return true;
+      });
+
+    } else {
+      // fallback auto tout à la fin
+      const txt = userText.toLowerCase();
+      const tokens = Array.from(new Set(
+        txt.split(/[^a-zàâçéèêëîïôùûüÿñœ'-]+/i)
+          .map(t => t.trim())
+          .filter(t => t.length >= 3)
+      )).slice(0, 5);
+
+      let rows = [];
+      if (tokens.length) {
+        const wheres = tokens.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
+        const params = tokens.map(t => `%${t}%`);
+        try {
+          rows = (
+            await pool.query(
+              `SELECT data FROM pnjs
+               WHERE ${wheres.join(' AND ')}
+               ORDER BY data->>'name'
+               LIMIT 6`,
+              params
+            )
+          ).rows;
+        } catch {}
+      }
+      pnjs = rows.map(r => r.data);
     }
-  }
-}
 
-// on fusionne tout ça
-const allPnjNames = Array.from(new Set([
-  ...pnjNamesFromBody,
-  ...mentionNames
-].map(n => String(n).trim()).filter(Boolean)));
+    // ... et là tu continues avec ton point 3, 4, 5 etc.
 
-let pnjs = [];
+    // ... et là tu continues avec ton point 3, 4, 5 etc.
 
-if (pnjIds.length) {
-  // priorité aux ids
-  pnjs = await loadPnjsByIds(pnjIds);
-} else if (allPnjNames.length) {
-  const found = [];
-  for (const rawName of allPnjNames) {
-    const raw = String(rawName || '').trim();
-    if (!raw) continue;
-
-    let rows = [];
-
-    // match exact
-    try {
-      rows = (await pool.query(
-        `SELECT data FROM pnjs
-         WHERE trim(lower(data->>'name')) = trim(lower($1))
-         LIMIT 1`,
-        [raw]
-      )).rows;
-    } catch {}
-
-    // préfixe
-    if (!rows.length) {
-      try {
-        rows = (await pool.query(
-          `SELECT data FROM pnjs
-           WHERE lower(data->>'name') LIKE lower($1)
-           ORDER BY data->>'name'
-           LIMIT 5`,
-          [raw.replace(/\s+/g,' ').trim() + '%']
-        )).rows;
-      } catch {}
-    }
-
-    // contient
-    if (!rows.length) {
-      try {
-        rows = (await pool.query(
-          `SELECT data FROM pnjs
-           WHERE lower(data->>'name') LIKE lower($1)
-           ORDER BY data->>'name'
-           LIMIT 3`,
-          [`%${raw}%`]
-        )).rows;
-      } catch {}
-    }
-
-    if (rows.length) {
-      found.push(rows[0].data);
-    }
-  }
-
-  // 🔁 on déduplique par id au cas où
-  const seen = new Set();
-  pnjs = found.filter(p => {
-    if (!p?.id) return false;
-    if (seen.has(p.id)) return false;
-    seen.add(p.id);
-    return true;
-  });
-
-} else {
-  // 🟣 fallback: auto-détection
-  const txt = userText.toLowerCase();
-  const tokens = Array.from(new Set(
-    txt
-      .split(/[^a-zàâçéèêëîïôùûüÿñœ'-]+/i)
-      .map(t => t.trim())
-      .filter(t => t.length >= 3)
-  )).slice(0, 5);
-
-  let rows = [];
-  if (tokens.length) {
-    const wheres = tokens.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
-    const params = tokens.map(t => `%${t}%`);
-    try {
-      rows = (
-        await pool.query(
-          `SELECT data FROM pnjs
-           WHERE ${wheres.join(' AND ')}
-           ORDER BY data->>'name'
-           LIMIT 6`,
-          params
-        )
-      ).rows;
-    } catch {}
-  }
-  pnjs = rows.map(r => r.data);
-}
 
 
 
@@ -1895,6 +1870,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
