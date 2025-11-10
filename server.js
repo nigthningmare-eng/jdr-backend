@@ -1527,43 +1527,51 @@ ${rules}
 `.trim();
 
     // 🔥 Style MJ forcé (Visual Novel complet, jouer la scène)
-    const extraVNHint = `
-TU DOIS PRODUIRE LA SCÈNE, PAS LA RÉSUMER.
+const extraVNHint = `
+TU ES LE MJ. TU DOIS JOUER LA SCÈNE, PAS LA RÉSUMER.
 
-FORMAT VISUAL NOVEL STRICT (OBLIGATOIRE) :
-- 1 PNJ = 1 BLOC séparé par UNE LIGNE VIDE.
-- Chaque bloc commence par le nom du PNJ **en gras** avec un emoji AVANT et APRÈS le nom.
-- Si le PNJ n'a pas d'emoji dans les données, choisis-en un dans cette liste: 🙂 😏 🤔 🤨 🤗 🔥 ❄️ 🌸 🐉 🛡️ 📜 💫
-- Après le nom : les émotions / attitudes entre *italiques*.
-- Ensuite : la réplique du PNJ en gras entre guillemets.
-- INTERDICTION d’écrire plusieurs PNJ dans le même bloc.
-- INTERDICTION de faire parler un PNJ non listé.
+FORMAT VISUAL NOVEL (OBLIGATOIRE) :
 
-TEMPLATE À SUIVRE MOT À MOT :
+- 1 PNJ = 1 BLOC.
+- 1 BLOC = exactement ceci :
 
 **{emoji} {NomPNJ} {emoji}** *({émotion / réaction courte})*
-**"{réplique du PNJ (1 à 4 phrases), fidèle à sa fiche}"**
+**"{réplique du PNJ (1 à 4 phrases max)}"**
 
 (ligne vide)
 
-Exemple :
+- TU DOIS mettre **une ligne vide** entre deux blocs, sinon le client ne peut pas l’afficher correctement.
+- TU DOIS utiliser les PNJ dans l’ordre suivant :
+  1. Tous ceux présents dans PNJ_ACTIFS
+  2. Puis ceux de PNJ_SECOND_PLAN (1 phrase max)
+- S’il y a 10 PNJ dans le contexte, tu écris 10 blocs (pas 3, pas 4).
+- INTERDIT de fusionner plusieurs PNJ dans le même bloc.
+- INTERDIT d’inventer un PNJ qui n’est pas dans la liste.
+- Si un PNJ est cité dans le texte joueur et qu’il est dans PNJ_DETAILS_FROM_DB, tu le fais parler AU MOINS UNE FOIS.
+
+RAPPEL MISE EN PAGE :
+- Noms et répliques en **gras**
+- émotions en *italique*
+- guillemets autour de la réplique
+
+EXEMPLE À SUIVRE :
 
 **🌸 Kazuma Satou 🌸** *(triomphant, bras croisés)*
-**"Donc là, j’ai attrapé le roi-démon..."**
+**"Franchement, sans moi, cette guilde serait déjà envahie par des crapauds géants."**
 
-**😏 Megumin 😏** *(offusquée)*
-**"Arrête de mentir, c’est moi qui ai lancé Explosion !"**
+**🧨 Megumin 🧨** *(offusquée)*
+**"Cesse de t’approprier mes exploits, vil pleutre !"**
 
-Pour les PNJ de second plan : même format mais 1 phrase max.
+**❄️ Aqua ❄️** *(pleurnicharde)*
+**"Et moi je n’ai même pas de salaire divin… c’est injuste !"**
+
+(etc.)
 
 À LA FIN tu peux ajouter :
-_Notes MJ : ..._
-
-RAPPEL IMPORTANT :
-- Utiliser UNIQUEMENT les PNJ listés dans PNJ_ACTIFS ou PNJ_SECOND_PLAN.
-- Respecter les relations indiquées dans PNJ_DETAILS_FROM_DB (pas d’inventions de fratries, mariages, etc.).
-- Si le joueur a déjà commencé la scène, tu la poursuis dans ce format, tu ne la réécris pas.
+_Notes MJ : météo, tension, PNJ qui observe en silence._
 `.trim();
+
+
 
 const fullBaseHint = `${systemHint}\n\n${extraVNHint}`;
 const previousHint = sess.data.lastSystemHint || '';
@@ -1878,6 +1886,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
