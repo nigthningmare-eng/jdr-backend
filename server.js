@@ -1439,24 +1439,7 @@ if (pnjIds.length) {
     const memo = lastNotes.length
       ? `\nMEMO (résumés précédents):\n- ${lastNotes.join('\n- ')}\n`
       : '';
-// --- 🧱 3️⃣ Définition du style et des règles MJ ---
-const rules = `
-Toujours respecter lockedTraits.
-Ne jamais changer l'identité d'un PNJ (nom, race, relations clés).
-Évite les répétitions des 2 dernières répliques.
-Interdit d’écrire seulement “La scène a été jouée/enregistrée.” — écrire la scène complète.
-Les PNJ de second plan peuvent réagir brièvement si c’est logique.
-`;
 
-const style = `
-STYLE (OBLIGATOIRE): Texte aéré, dialogues séparés en bloc.
-Les noms et les dialogues des PNJ doivent être en gras.
-Utiliser des émojis avant et après les noms des PNJ.
-Afficher les gros titres avec le fuseau horaire et la météo.
-Ajouter les réactions et émotions des personnages entre *italiques*.
-Ignorer tout personnage non présent dans la base tant qu'ils ne sont pas déclarés comme canons.
-Niveau contenu: mature (pas de détails graphiques).
-`;
 
     // ========= 5. cartes compactes =========
     const pnjCards = pnjs.slice(0, 8).map(compactCard);
@@ -1585,11 +1568,19 @@ RAPPEL IMPORTANT :
 const fullBaseHint = `${systemHint}\n\n${extraVNHint}`;
 const previousHint = sess.data.lastSystemHint || '';
 const fullSystemHint = [
-  systemHint,
+  fullBaseHint,
   previousHint.includes('[ENGINE CONTEXT]') ? '' : previousHint
 ].filter(Boolean).join('\n\n');
 
 sess.data.lastSystemHint = fullSystemHint;
+await saveSession(sid, sess.data);
+// 🔧 Fusionne PNJ trouvés avec ceux déjà connus dans la session
+sess.data.roster = Array.isArray(sess.data.roster) ? sess.data.roster : [];
+const existingIds = new Set(sess.data.roster.map(p => p.id));
+for (const p of pnjs) {
+  if (!p?.id || existingIds.has(p.id)) continue;
+  sess.data.roster.push(p);
+}
 await saveSession(sid, sess.data);
 
     return res.status(200).json({
@@ -1692,14 +1683,6 @@ app.post('/api/engine/commit', async (req, res) => {
     return res.status(500).json({ ok: false, message: 'commit failed' });
   }
 });
-// 🔧 Fusionne PNJ trouvés avec ceux déjà connus dans la session
-sess.data.roster = Array.isArray(sess.data.roster) ? sess.data.roster : [];
-const existingIds = new Set(sess.data.roster.map(p => p.id));
-for (const p of pnjs) {
-  if (!p?.id || existingIds.has(p.id)) continue;
-  sess.data.roster.push(p);
-}
-await saveSession(sid, sess.data);
 
 // =================== STYLE & CONTENT SETTINGS ===================
 app.post('/api/style', async (req, res) => {
@@ -1895,6 +1878,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
