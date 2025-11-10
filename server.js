@@ -1283,23 +1283,50 @@ app.post('/api/engine/context', async (req, res) => {
   
 
 
-    // ========= 2. résolution PNJ (ids, noms, ou détection auto) =========
- let pnjs = [];
+// ========= 2. résolution PNJ (ids, noms, ou détection auto) =========
+
+// ce que t'envoie le client
+const pnjIds = Array.isArray(body.pnjIds) ? body.pnjIds : [];
+const pnjNamesFromBody = Array.isArray(body.pnjNames)
+  ? body.pnjNames
+  : (body.name ? [String(body.name)] : []);
+
+// 🆕 on essaie d'extraire des noms depuis le userText
+// ex: "Kazuma, Megumin, Aqua, Rias, Akeno, Tifa nettoie ses verres..."
+const mentionNames = [];
+if (userText) {
+  // petit regex pas parfait mais suffisant pour choper les noms composés
+  const re = /([A-ZÉÈÀÂÎÔÛÇ][a-zàâçéèêëîïôùûüÿñœ]+(?:\s+[A-Z][a-zàâçéèêëîïôùûüÿñœ]+)*)/g;
+  let m;
+  while ((m = re.exec(userText)) !== null) {
+    const candidate = m[1].trim();
+    // on filtre quelques mots génériques si besoin
+    if (!['Le','La','Les','Et','Mais','Donc','Alors','Une','Un'].includes(candidate)) {
+      mentionNames.push(candidate);
+    }
+  }
+}
+
+// on fusionne tout ça
+const allPnjNames = Array.from(new Set([
+  ...pnjNamesFromBody,
+  ...mentionNames
+].map(n => String(n).trim()).filter(Boolean)));
+
+let pnjs = [];
 
 if (pnjIds.length) {
-  // 1) si on a des IDs directs → plus simple
+  // priorité aux ids
   pnjs = await loadPnjsByIds(pnjIds);
-
 } else if (allPnjNames.length) {
-  // 2) on essaie de résoudre TOUS les noms trouvés dans le texte / envoyés
+  // on tente de résoudre TOUS les noms cités
   const found = [];
   for (const rawName of allPnjNames) {
     const raw = String(rawName || '').trim();
     if (!raw) continue;
 
     let rows = [];
-
-    // essai 1 : égalité stricte
+    // match exact
     try {
       rows = (await pool.query(
         `SELECT data FROM pnjs
@@ -1309,7 +1336,7 @@ if (pnjIds.length) {
       )).rows;
     } catch {}
 
-    // essai 2 : commence par
+    // préfixe
     if (!rows.length) {
       try {
         rows = (await pool.query(
@@ -1317,41 +1344,32 @@ if (pnjIds.length) {
            WHERE lower(data->>'name') LIKE lower($1)
            ORDER BY data->>'name'
            LIMIT 5`,
-          [raw.replace(/\s+/g, ' ').trim() + '%']
+          [raw.replace(/\s+/g,' ').trim() + '%']
         )).rows;
       } catch {}
     }
 
-    // essai 3 : contient
+    // contient
     if (!rows.length) {
       try {
         rows = (await pool.query(
           `SELECT data FROM pnjs
            WHERE lower(data->>'name') LIKE lower($1)
            ORDER BY data->>'name'
-           LIMIT 1`,
+           LIMIT 3`,
           [`%${raw}%`]
         )).rows;
       } catch {}
     }
 
     if (rows.length) {
+      // on prend le 1er pour ce nom
       found.push(rows[0].data);
     }
   }
-
-  // dédoublonnage par id
-  const seen = new Set();
-  pnjs = [];
-  for (const p of found) {
-    if (!p?.id) continue;
-    if (seen.has(p.id)) continue;
-    seen.add(p.id);
-    pnjs.push(p);
-  }
-
+  pnjs = found;
 } else {
-  // 3) fallback : détection auto comme avant
+  // 🟣 fallback: ton ancien mode auto-détection si VRAIMENT aucun nom n'a été trouvé
   const txt = userText.toLowerCase();
   const tokens = Array.from(new Set(
     txt
@@ -1376,26 +1394,9 @@ if (pnjIds.length) {
       ).rows;
     } catch {}
   }
-
-  if (!rows.length && tokens.length) {
-    const top2 = [...tokens].sort((a, b) => b.length - a.length).slice(0, 2);
-    const wheres = top2.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
-    const params = top2.map(t => `%${t}%`);
-    try {
-      rows = (
-        await pool.query(
-          `SELECT data FROM pnjs
-           WHERE ${wheres.join(' AND ')}
-           ORDER BY data->>'name'
-           LIMIT 6`,
-          params
-        )
-      ).rows;
-    } catch {}
-  }
-
   pnjs = rows.map(r => r.data);
 }
+
 
 
     // ========= 3. fusion avec roster épinglé + tour précédent =========
@@ -1886,6 +1887,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
