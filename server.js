@@ -1445,24 +1445,25 @@ app.post('/api/engine/context', async (req, res) => {
     const backgroundPnjs = pnjCards.slice(3);
 
     // ========= 7. règles MJ + style =========
-    const rules = [
-      'Toujours respecter lockedTraits.',
-      "Ne jamais changer l'identité d'un PNJ (nom, race, relations clés).",
-      'Évite les répétitions des 2 dernières répliques.',
-      'Interdit d’écrire seulement “La scène a été jouée/enregistrée.” — écrire la scène complète.',
-      'Les PNJ de second plan peuvent réagir brièvement si c’est logique.'
-    ].join(' ');
+// ========= 7. règles MJ + style =========
+const rules = [
+  'Toujours respecter lockedTraits.',
+  "Ne jamais changer l'identité d'un PNJ (nom, race, relations clés).",
+  'Évite les répétitions des 2 dernières répliques.',
+  'Interdit d’écrire seulement “La scène a été jouée/enregistrée.” — écrire la scène complète.',
+  'Les PNJ de second plan peuvent réagir brièvement si c’est logique.'
+].join(' ');
 
-    const styleText = String(narrativeStyle?.styleText || '').trim();
-    const contentGuard = `Niveau contenu: ${contentSettings?.explicitLevel || 'mature'} (pas de détails graphiques).`;
-    const style = [
-      styleText || 'Light novel isekai, sobre, immersif.',
-      contentGuard
-    ].join(' ');
+// ⚠️ on impose NOTRE style, pas celui venu de la base
+const style = `
+FORMAT VISUAL NOVEL STRICT (OBLIGATOIRE) :
+- 1 PNJ = 1 bloc séparé par UNE LIGNE VIDE.
+- Chaque bloc commence par le nom du PNJ **en gras** avec un emoji AVANT et APRÈS le nom.
+- Après le nom : l’émotion entre *italiques*.
+- Ensuite : la réplique du PNJ en **gras** et entre guillemets.
+- INTERDICTION d’écrire plusieurs PNJ dans le même bloc.
+`.trim();
 
-    const anchors = dossiers
-      .map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`)
-      .join('\n');
 
     // ========= 7bis. PNJ détaillés depuis la DB =========
     const pnjDetails = pnjs.slice(0, 50).map(p => ({
@@ -1870,6 +1871,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
