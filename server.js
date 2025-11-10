@@ -1292,16 +1292,14 @@ const pnjNamesFromBody = Array.isArray(body.pnjNames)
   : (body.name ? [String(body.name)] : []);
 
 // 🆕 on essaie d'extraire des noms depuis le userText
-// ex: "Kazuma, Megumin, Aqua, Rias, Akeno, Tifa nettoie ses verres..."
 const mentionNames = [];
 if (userText) {
-  // petit regex pas parfait mais suffisant pour choper les noms composés
-  const re = /([A-ZÉÈÀÂÎÔÛÇ][a-zàâçéèêëîïôùûüÿñœ]+(?:\s+[A-Z][a-zàâçéèêëîïôùûüÿñœ]+)*)/g;
+  const re = /([A-ZÉÈÀÂÎÔÛÇ][a-zàâçéèêëîïôùûüÿñœ]+(?:\s+[A-ZÉÈÀÂÎÔÛÇ][a-zàâçéèêëîïôùûüÿñœ]+)*)/g;
   let m;
+  const stopWords = ['Le','La','Les','Et','Mais','Donc','Alors','Une','Un','Au','Aux','Du','De','Des'];
   while ((m = re.exec(userText)) !== null) {
     const candidate = m[1].trim();
-    // on filtre quelques mots génériques si besoin
-    if (!['Le','La','Les','Et','Mais','Donc','Alors','Une','Un'].includes(candidate)) {
+    if (!stopWords.includes(candidate)) {
       mentionNames.push(candidate);
     }
   }
@@ -1319,13 +1317,13 @@ if (pnjIds.length) {
   // priorité aux ids
   pnjs = await loadPnjsByIds(pnjIds);
 } else if (allPnjNames.length) {
-  // on tente de résoudre TOUS les noms cités
   const found = [];
   for (const rawName of allPnjNames) {
     const raw = String(rawName || '').trim();
     if (!raw) continue;
 
     let rows = [];
+
     // match exact
     try {
       rows = (await pool.query(
@@ -1363,13 +1361,21 @@ if (pnjIds.length) {
     }
 
     if (rows.length) {
-      // on prend le 1er pour ce nom
       found.push(rows[0].data);
     }
   }
-  pnjs = found;
+
+  // 🔁 on déduplique par id au cas où
+  const seen = new Set();
+  pnjs = found.filter(p => {
+    if (!p?.id) return false;
+    if (seen.has(p.id)) return false;
+    seen.add(p.id);
+    return true;
+  });
+
 } else {
-  // 🟣 fallback: ton ancien mode auto-détection si VRAIMENT aucun nom n'a été trouvé
+  // 🟣 fallback: auto-détection
   const txt = userText.toLowerCase();
   const tokens = Array.from(new Set(
     txt
@@ -1396,6 +1402,8 @@ if (pnjIds.length) {
   }
   pnjs = rows.map(r => r.data);
 }
+
+
 
 
 
@@ -1887,6 +1895,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
