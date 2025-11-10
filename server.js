@@ -1438,9 +1438,49 @@ app.post('/api/engine/context', async (req, res) => {
     sess.data.lastPnjCards = pnjCards;
     await saveSession(sid, sess.data);
 
-https://anime-sama.org/
+    const dossiers = pnjs.map(p => sess.data.dossiersById[p.id]).filter(Boolean);
 
-    // ========= 8. systemHint final (Style VN immersif + DB) =========
+    // ========= 6. actifs / second plan =========
+    const activePnjs = pnjCards.slice(0, 3);
+    const backgroundPnjs = pnjCards.slice(3);
+
+    // ========= 7. règles MJ + style =========
+    const rules = [
+      'Toujours respecter lockedTraits.',
+      "Ne jamais changer l'identité d'un PNJ (nom, race, relations clés).",
+      'Évite les répétitions des 2 dernières répliques.',
+      'Interdit d’écrire seulement “La scène a été jouée/enregistrée.” — écrire la scène complète.',
+      'Les PNJ de second plan peuvent réagir brièvement si c’est logique.'
+    ].join(' ');
+
+    const style = `
+FORMAT VISUAL NOVEL STRICT (OBLIGATOIRE) :
+- 1 PNJ = 1 bloc séparé par UNE LIGNE VIDE.
+- Chaque bloc commence par le nom du PNJ **en gras** avec un emoji AVANT et APRÈS le nom.
+- Après le nom : l’émotion entre *italiques*.
+- Ensuite : la réplique du PNJ en **gras** et entre guillemets.
+- INTERDICTION d’écrire plusieurs PNJ dans le même bloc.
+`.trim();
+
+    // ========= 7bis. PNJ détaillés depuis la DB =========
+    const pnjDetails = pnjs.slice(0, 50).map(p => ({
+      id: p.id,
+      name: p.name,
+      appearance: p.appearance,
+      personalityTraits: p.personalityTraits,
+      backstory: p.backstory,
+      raceName: p.raceName || p.raceId,
+      relations: p.relations || p.relationships || null,
+      locationId: p.locationId,
+      lockedTraits: p.lockedTraits || []
+    }));
+
+    // ✅ ICI on calcule anchors (tu l’avais oublié dans ta dernière version)
+    const anchors = dossiers
+      .map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`)
+      .join('\n');
+
+    // ========= 8. systemHint final =========
     const headerMeta = '🌩️ [Lieu] — [Date/Heure] — [Météo]\n';
     const roster = pnjCards.map(c => `${c.emoji || '🙂'} ${c.name}#${c.id}`).join(', ');
 
@@ -1473,70 +1513,38 @@ RÈGLES MJ:
 ${rules}
 `.trim();
 
-    // 🔥 Style MJ forcé (Visual Novel complet, jouer la scène)
-const extraVNHint = `
+    const extraVNHint = `
 TU ES LE MJ. TU DOIS JOUER LA SCÈNE, PAS LA RÉSUMER.
 
-FORMAT VISUAL NOVEL (OBLIGATOIRE) :
+**FORMAT À SUIVRE :**
 
-- 1 PNJ = 1 BLOC.
-- 1 BLOC = exactement ceci :
-
-**{emoji} {NomPNJ} {emoji}** *({émotion / réaction courte})*
-**"{réplique du PNJ (1 à 4 phrases max)}"**
+**{emoji} {NomPNJ} {emoji}** *({émotion courte})*
+**"{réplique (1 à 4 phrases max)}"**
 
 (ligne vide)
 
-- TU DOIS mettre **une ligne vide** entre deux blocs, sinon le client ne peut pas l’afficher correctement.
-- TU DOIS utiliser les PNJ dans l’ordre suivant :
-  1. Tous ceux présents dans PNJ_ACTIFS
-  2. Puis ceux de PNJ_SECOND_PLAN (1 phrase max)
-- S’il y a 10 PNJ dans le contexte, tu écris 10 blocs (pas 3, pas 4).
-- INTERDIT de fusionner plusieurs PNJ dans le même bloc.
-- INTERDIT d’inventer un PNJ qui n’est pas dans la liste.
-- Si un PNJ est cité dans le texte joueur et qu’il est dans PNJ_DETAILS_FROM_DB, tu le fais parler AU MOINS UNE FOIS.
-
-RAPPEL MISE EN PAGE :
-- Noms et répliques en **gras**
-- émotions en *italique*
-- guillemets autour de la réplique
-
-EXEMPLE À SUIVRE :
-
-**🌸 Kazuma Satou 🌸** *(triomphant, bras croisés)*
-**"Franchement, sans moi, cette guilde serait déjà envahie par des crapauds géants."**
-
-**🧨 Megumin 🧨** *(offusquée)*
-**"Cesse de t’approprier mes exploits, vil pleutre !"**
-
-**❄️ Aqua ❄️** *(pleurnicharde)*
-**"Et moi je n’ai même pas de salaire divin… c’est injuste !"**
-
-(etc.)
-
-À LA FIN tu peux ajouter :
-_Notes MJ : météo, tension, PNJ qui observe en silence._
+- 1 PNJ = 1 bloc
+- tous les PNJ listés doivent parler au moins une fois
+- PNJ_SECOND_PLAN = 1 phrase
+- pas de PNJ inventé
 `.trim();
 
+    const fullBaseHint = `${systemHint}\n\n${extraVNHint}`;
+    const previousHint = sess.data.lastSystemHint || '';
+    const fullSystemHint = [
+      fullBaseHint,
+      previousHint.includes('[ENGINE CONTEXT]') ? '' : previousHint
+    ].filter(Boolean).join('\n\n');
 
-
-const fullBaseHint = `${systemHint}\n\n${extraVNHint}`;
-const previousHint = sess.data.lastSystemHint || '';
-const fullSystemHint = [
-  fullBaseHint,
-  previousHint.includes('[ENGINE CONTEXT]') ? '' : previousHint
-].filter(Boolean).join('\n\n');
-
-sess.data.lastSystemHint = fullSystemHint;
-await saveSession(sid, sess.data);
-// 🔧 Fusionne PNJ trouvés avec ceux déjà connus dans la session
-sess.data.roster = Array.isArray(sess.data.roster) ? sess.data.roster : [];
-const existingIds = new Set(sess.data.roster.map(p => p.id));
-for (const p of pnjs) {
-  if (!p?.id || existingIds.has(p.id)) continue;
-  sess.data.roster.push(p);
-}
-await saveSession(sid, sess.data);
+    // 🔧 on fusionne aussi le roster dans la session
+    sess.data.lastSystemHint = fullSystemHint;
+    sess.data.roster = Array.isArray(sess.data.roster) ? sess.data.roster : [];
+    const existingIds = new Set(sess.data.roster.map(p => p.id));
+    for (const p of pnjs) {
+      if (!p?.id || existingIds.has(p.id)) continue;
+      sess.data.roster.push(p);
+    }
+    await saveSession(sid, sess.data);
 
     return res.status(200).json({
       guard: { antiLoop: { token, lastHashes }, rules, style },
@@ -1546,6 +1554,7 @@ await saveSession(sid, sess.data);
       systemHint: fullSystemHint,
       turn: Number(sess.data.turn || 0) + 1
     });
+
 
   } catch (e) {
     console.error('engine/context error:', e);
@@ -1833,6 +1842,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
