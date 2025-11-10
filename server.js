@@ -1284,18 +1284,22 @@ app.post('/api/engine/context', async (req, res) => {
 
 
     // ========= 2. résolution PNJ (ids, noms, ou détection auto) =========
-  let pnjs = [];
+ let pnjs = [];
 
 if (pnjIds.length) {
+  // 1) si on a des IDs directs → plus simple
   pnjs = await loadPnjsByIds(pnjIds);
+
 } else if (allPnjNames.length) {
-  // on essaie de résoudre TOUS les noms trouvés
+  // 2) on essaie de résoudre TOUS les noms trouvés dans le texte / envoyés
   const found = [];
   for (const rawName of allPnjNames) {
     const raw = String(rawName || '').trim();
     if (!raw) continue;
-    // même logique que tu avais avant pour trouver par nom
+
     let rows = [];
+
+    // essai 1 : égalité stricte
     try {
       rows = (await pool.query(
         `SELECT data FROM pnjs
@@ -1304,6 +1308,8 @@ if (pnjIds.length) {
         [raw]
       )).rows;
     } catch {}
+
+    // essai 2 : commence par
     if (!rows.length) {
       try {
         rows = (await pool.query(
@@ -1311,12 +1317,13 @@ if (pnjIds.length) {
            WHERE lower(data->>'name') LIKE lower($1)
            ORDER BY data->>'name'
            LIMIT 5`,
-          [raw.replace(/\s+/g,' ').trim() + '%']
+          [raw.replace(/\s+/g, ' ').trim() + '%']
         )).rows;
       } catch {}
     }
+
+    // essai 3 : contient
     if (!rows.length) {
-      // fallback contient
       try {
         rows = (await pool.query(
           `SELECT data FROM pnjs
@@ -1327,58 +1334,69 @@ if (pnjIds.length) {
         )).rows;
       } catch {}
     }
+
     if (rows.length) {
       found.push(rows[0].data);
     }
   }
-  pnjs = found;
+
+  // dédoublonnage par id
+  const seen = new Set();
+  pnjs = [];
+  for (const p of found) {
+    if (!p?.id) continue;
+    if (seen.has(p.id)) continue;
+    seen.add(p.id);
+    pnjs.push(p);
+  }
+
 } else {
-  // ton mode "détection auto"
+  // 3) fallback : détection auto comme avant
+  const txt = userText.toLowerCase();
+  const tokens = Array.from(new Set(
+    txt
+      .split(/[^a-zàâçéèêëîïôùûüÿñœ'-]+/i)
+      .map(t => t.trim())
+      .filter(t => t.length >= 3)
+  )).slice(0, 5);
+
+  let rows = [];
+  if (tokens.length) {
+    const wheres = tokens.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
+    const params = tokens.map(t => `%${t}%`);
+    try {
+      rows = (
+        await pool.query(
+          `SELECT data FROM pnjs
+           WHERE ${wheres.join(' AND ')}
+           ORDER BY data->>'name'
+           LIMIT 6`,
+          params
+        )
+      ).rows;
+    } catch {}
+  }
+
+  if (!rows.length && tokens.length) {
+    const top2 = [...tokens].sort((a, b) => b.length - a.length).slice(0, 2);
+    const wheres = top2.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
+    const params = top2.map(t => `%${t}%`);
+    try {
+      rows = (
+        await pool.query(
+          `SELECT data FROM pnjs
+           WHERE ${wheres.join(' AND ')}
+           ORDER BY data->>'name'
+           LIMIT 6`,
+          params
+        )
+      ).rows;
+    } catch {}
+  }
+
+  pnjs = rows.map(r => r.data);
 }
 
-      // détection auto
-      const txt = userText.toLowerCase();
-      const tokens = Array.from(new Set(
-        txt
-          .split(/[^a-zàâçéèêëîïôùûüÿñœ'-]+/i)
-          .map(t => t.trim())
-          .filter(t => t.length >= 3)
-      )).slice(0, 5);
-
-      let rows = [];
-      if (tokens.length) {
-        const wheres = tokens.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
-        const params = tokens.map(t => `%${t}%`);
-        try {
-          rows = (
-            await pool.query(
-              `SELECT data FROM pnjs
-               WHERE ${wheres.join(' AND ')}
-               ORDER BY data->>'name'
-               LIMIT 6`,
-              params
-            )
-          ).rows;
-        } catch {}
-      }
-      if (!rows.length && tokens.length) {
-        const top2 = [...tokens].sort((a,b)=>b.length-a.length).slice(0,2);
-        const wheres = top2.map((_, i) => `lower(data->>'name') LIKE $${i + 1}`);
-        const params = top2.map(t => `%${t}%`);
-        try {
-          rows = (
-            await pool.query(
-              `SELECT data FROM pnjs
-               WHERE ${wheres.join(' AND ')}
-               ORDER BY data->>'name'
-               LIMIT 6`,
-              params
-            )
-          ).rows;
-        } catch {}
-      }
-      pnjs = rows.map(r => r.data);
-    }
 
     // ========= 3. fusion avec roster épinglé + tour précédent =========
     const pinned = Array.isArray(sess.data.pinRoster) ? sess.data.pinRoster : [];
@@ -1843,6 +1861,7 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
