@@ -40,19 +40,6 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000
 });
-
-
-// PNJ par noms ou tous
-app.get('/apipnjs', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT data FROM pnjs LIMIT 100');
-    const pnjs = result.rows.map(r => r.data);
-    res.json(pnjs);
-  } catch (e) {
-    console.error('GET /apipnjs error:', e);
-    res.status(500).json({ message: 'DB error' });
-  }
-});
 // Route pour générer une scène RP via l’IA Ollama (RP dynamique)
 app.post('/api/scene', async (req, res) => {
   try {
@@ -82,7 +69,6 @@ app.post('/api/scene', async (req, res) => {
   }
 });
 // ---------- Mémoire légère (fichiers locaux) ----------
-let storyState = safeRequire('./storyState.json', {});
 let narrativeStyle = { styleText: '' }; // sera rechargé depuis la table settings
 let contentSettings = { explicitLevel: 'mature' }; // 'safe' | 'mature' | 'fade'
 
@@ -1507,14 +1493,18 @@ app.post('/api/engine/context', async (req, res) => {
       'Les PNJ de second plan peuvent réagir brièvement si c’est logique.'
     ].join(' ');
 
-    const style = `
+const style = `
 FORMAT VISUAL NOVEL STRICT (OBLIGATOIRE) :
 - 1 PNJ = 1 bloc séparé par UNE LIGNE VIDE.
 - Chaque bloc commence par le nom du PNJ **en gras** avec un emoji AVANT et APRÈS le nom.
 - Après le nom : l’émotion entre *italiques*.
 - Ensuite : la réplique du PNJ en **gras** et entre guillemets.
 - INTERDICTION d’écrire plusieurs PNJ dans le même bloc.
+
+STYLE PERSONNALISÉ DU MJ (OPTIONNEL) :
+${narrativeStyle?.styleText || '(aucun style personnalisé défini pour le moment)'}
 `.trim();
+
 
     // ========= 7bis. PNJ détaillés depuis la DB =========
     const pnjDetails = pnjs.slice(0, 50).map(p => ({
@@ -1590,24 +1580,29 @@ TU ES LE MJ. TU DOIS JOUER LA SCÈNE, PAS LA RÉSUMER.
       previousHint.includes('[ENGINE CONTEXT]') ? '' : previousHint
     ].filter(Boolean).join('\n\n');
 
-    // 🔧 on fusionne aussi le roster dans la session
-    sess.data.lastSystemHint = fullSystemHint;
-    sess.data.roster = Array.isArray(sess.data.roster) ? sess.data.roster : [];
-    const existingIds = new Set(sess.data.roster.map(p => p.id));
-    for (const p of pnjs) {
-      if (!p?.id || existingIds.has(p.id)) continue;
-      sess.data.roster.push(p);
-    }
-    await saveSession(sid, sess.data);
+// 🔧 on fusionne aussi le roster dans la session
+sess.data.lastSystemHint = fullSystemHint;
+sess.data.roster = Array.isArray(sess.data.roster) ? sess.data.roster : [];
+const existingIds = new Set(sess.data.roster.map(p => p.id));
+for (const p of pnjs) {
+  if (!p?.id || existingIds.has(p.id)) continue;
+  sess.data.roster.push(p);
+}
 
-    return res.status(200).json({
-      guard: { antiLoop: { token, lastHashes }, rules, style },
-      pnjCards,
-      dossiers,
-      pnjDetails,
-      systemHint: fullSystemHint,
-      turn: Number(sess.data.turn || 0) + 1
-    });
+// 🔢 on incrémente le numéro de tour et on le persiste
+sess.data.turn = Number(sess.data.turn || 0) + 1;
+
+await saveSession(sid, sess.data);
+
+return res.status(200).json({
+  guard: { antiLoop: { token, lastHashes }, rules, style },
+  pnjCards,
+  dossiers,
+  pnjDetails,
+  systemHint: fullSystemHint,
+  turn: sess.data.turn
+});
+
 
 
   } catch (e) {
@@ -1905,6 +1900,7 @@ app.post('/api/rp-ia', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
