@@ -5,7 +5,7 @@ const fs = require('fs');
 const { Pool } = require('pg');
 const fetch = require('node-fetch'); // Met ça en haut de ton fichier
 
-
+require('dotenv').config();
 async function demandeIA(texte) {
   const response = await fetch('http://localhost:11434/api/generate', {
     method: 'POST',
@@ -31,20 +31,14 @@ app.use(cors());
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
-// ---------- DB ----------
+
+
 
 // ---------- DB ----------
-
-// ---------- DB ----------
-
-// On active SSL seulement si on détecte un hébergeur qui le demande (ex : Neon)
-const shouldUseSSL =
-  process.env.DATABASE_URL &&
-  /neon\.tech|render\.com|supabase\.co/i.test(process.env.DATABASE_URL);
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: shouldUseSSL ? { rejectUnauthorized: false } : false,
+  connectionString: process.env.DATABASE_URL, // ton URI Neon depuis .env
+  ssl: { rejectUnauthorized: false },         // obligatoire pour Neon
   max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000
@@ -1911,6 +1905,7 @@ app.post('/api/rp-ia', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
