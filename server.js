@@ -36,13 +36,22 @@ app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 // ---------- DB ----------
 
+// Pour voir ce que Node lit vraiment
+console.log('DATABASE_URL =', process.env.DATABASE_URL);
+
+// On active SSL seulement si on détecte un hébergeur qui le demande (ex : Neon)
+const shouldUseSSL =
+  process.env.DATABASE_URL &&
+  /neon\.tech|render\.com|supabase\.co/i.test(process.env.DATABASE_URL);
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL, // ton URI Neon depuis .env
-  ssl: { rejectUnauthorized: false },         // obligatoire pour Neon
+  connectionString: process.env.DATABASE_URL,
+  ssl: shouldUseSSL ? { rejectUnauthorized: false } : false,
   max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000
 });
+
 
 
 // Route pour générer une scène RP via l’IA Ollama (RP dynamique)
@@ -1905,6 +1914,7 @@ app.post('/api/rp-ia', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
