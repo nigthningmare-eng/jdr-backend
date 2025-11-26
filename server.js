@@ -4,6 +4,7 @@ const cors = require('cors');
 const fs = require('fs');
 const { Pool } = require('pg');
 const fetch = require('node-fetch'); // Met ça en haut de ton fichier
+const fetch = require('node-fetch');
 
 async function demandeIA(texte) {
   const response = await fetch('http://localhost:11434/api/generate', {
@@ -1865,6 +1866,7 @@ app.post('/api/rp-ia', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
