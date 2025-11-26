@@ -32,7 +32,6 @@ app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 // ---------- DB ----------
-const { Pool } = require('pg');
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL, // mettre ton URI Neon dans .env !
@@ -1909,6 +1908,7 @@ app.post('/api/rp-ia', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
