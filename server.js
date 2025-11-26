@@ -3,6 +3,20 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const { Pool } = require('pg');
+const fetch = require('node-fetch'); // Met ça en haut de ton fichier
+
+async function demandeIA(texte) {
+  const response = await fetch('http://localhost:11434/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: 'phi',
+      prompt: texte
+    })
+  });
+  const data = await response.json();
+  return data.response;
+}
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -1837,11 +1851,21 @@ app.get('/', (req, res) => {
     ]
   });
 });
+app.post('/api/rp-ia', async (req, res) => {
+  const contexte = req.body.contexte;
+  try {
+    const reponseRP = await demandeIA(contexte);
+    res.json({ rp: reponseRP });
+  } catch (e) {
+    res.status(500).json({ error: 'Erreur IA', details: e.message });
+  }
+});
 
 // ---------------- Lancement ----------------
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
