@@ -32,15 +32,59 @@ app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 // ---------- DB ----------
+const { Pool } = require('pg');
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: false,
+  connectionString: process.env.DATABASE_URL, // mettre ton URI Neon dans .env !
+  ssl: { rejectUnauthorized: false },         // obligatoire pour Neon
   max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000
 });
 
+const express = require('express');
+const app = express();
+const port = process.env.PORT || 3000;
 
+// PNJ par noms ou tous
+app.get('/apipnjs', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT data FROM pnjs LIMIT 100');
+    const pnjs = result.rows.map(r => r.data);
+    res.json(pnjs);
+  } catch (e) {
+    console.error('GET /apipnjs error:', e);
+    res.status(500).json({ message: 'DB error' });
+  }
+});
+// Route pour générer une scène RP via l’IA Ollama (RP dynamique)
+app.post('/api/scene', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT data FROM pnjs LIMIT 8');
+    const pnjs = result.rows.map(r => r.data);
+
+    let prompt = "Tu es un maître de jeu de rôle. Voici le roster actuel :\n";
+    for (const pnj of pnjs) {
+      prompt += `- ${pnj.name} : ${pnj.description}\n`;
+    }
+    prompt += "\nDécris la scène d'interaction entre ces PNJ dans le style Visual Novel, avec dialogues séparés.";
+
+    const response = await fetch('http://localhost:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama2', // adapte si tu utilises un autre modèle
+        prompt: prompt
+      })
+    });
+
+    const data = await response.json();
+    res.json({ result: data.response });
+  } catch (err) {
+    console.error('POST /api/scene error:', err);
+    res.status(500).json({ message: 'Erreur IA ou DB' });
+  }
+});
 // ---------- Mémoire légère (fichiers locaux) ----------
 let storyState = safeRequire('./storyState.json', {});
 let narrativeStyle = { styleText: '' }; // sera rechargé depuis la table settings
@@ -1865,6 +1909,7 @@ app.post('/api/rp-ia', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
