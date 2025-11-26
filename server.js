@@ -34,13 +34,12 @@ app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 // ---------- DB ----------
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('localhost')
-    ? false
-    : { rejectUnauthorized: false },
+  ssl: false,
   max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000
 });
+
 
 // ---------- Mémoire légère (fichiers locaux) ----------
 let storyState = safeRequire('./storyState.json', {});
@@ -1866,6 +1865,7 @@ app.post('/api/rp-ia', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
