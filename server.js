@@ -41,9 +41,6 @@ const pool = new Pool({
   connectionTimeoutMillis: 10000
 });
 
-const express = require('express');
-const app = express();
-const port = process.env.PORT || 3000;
 
 // PNJ par noms ou tous
 app.get('/apipnjs', async (req, res) => {
@@ -1908,6 +1905,7 @@ app.post('/api/rp-ia', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
