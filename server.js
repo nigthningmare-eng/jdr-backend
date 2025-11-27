@@ -11,7 +11,7 @@ async function demandeIA(texte) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'phi',
+      model: 'llama2-uncensored',
       prompt: texte
     })
   });
@@ -1914,6 +1914,7 @@ app.post('/api/rp-ia', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
