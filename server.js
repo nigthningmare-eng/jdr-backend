@@ -11,13 +11,33 @@ async function demandeIA(texte) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'llama2-uncensored',
-      prompt: texte
+      model: 'llama2:latest',   // le modèle que tu as vraiment
+      prompt: texte,
+      stream: false             // ⚠️ important : pas de stream, 1 seul JSON
     })
   });
+
+  if (!response.ok) {
+    const txt = await response.text();
+    console.error('Erreur Ollama:', txt);
+    throw new Error('Ollama error: ' + txt);
+  }
+
   const data = await response.json();
   return data.response;
 }
+
+
+  if (!response.ok) {
+    const txt = await response.text();
+    console.error('Erreur Ollama:', txt);
+    throw new Error('Ollama error: ' + txt);
+  }
+
+  const data = await response.json();
+  return data.response;
+}
+
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -66,14 +86,16 @@ app.post('/api/scene', async (req, res) => {
     }
     prompt += "\nDécris la scène d'interaction entre ces PNJ dans le style Visual Novel, avec dialogues séparés.";
 
-    const response = await fetch('http://localhost:11434/api/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'llama2', // adapte si tu utilises un autre modèle
-        prompt: prompt
-      })
-    });
+const response = await fetch('http://localhost:11434/api/generate', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    model: 'llama2:latest', // même modèle que plus haut
+    prompt: prompt,
+    stream: false
+  })
+});
+
 
     const data = await response.json();
     res.json({ result: data.response });
@@ -1914,6 +1936,7 @@ app.post('/api/rp-ia', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
