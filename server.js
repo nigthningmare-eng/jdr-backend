@@ -11,11 +11,17 @@ async function demandeIA(texte) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'llama2:latest',   // le modèle que tu as vraiment
+      model: 'llama2-uncensored:latest', // ou un autre modèle de /api/tags si tu préfères
       prompt: texte,
-      stream: false             // ⚠️ important : pas de stream, 1 seul JSON
+      stream: false                      // <- ULTRA IMPORTANT
     })
   });
+
+  const data = await response.json();
+  return data.response;
+}
+
+
 
   if (!response.ok) {
     const txt = await response.text();
@@ -97,13 +103,16 @@ const response = await fetch('http://localhost:11434/api/generate', {
 });
 
 
-    const data = await response.json();
-    res.json({ result: data.response });
-  } catch (err) {
-    console.error('POST /api/scene error:', err);
-    res.status(500).json({ message: 'Erreur IA ou DB' });
-  }
-});
+    const response = await fetch('http://localhost:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'llama2-uncensored:latest',
+        prompt: prompt,
+        stream: false
+      })
+    });
+
 // ---------- Mémoire légère (fichiers locaux) ----------
 let narrativeStyle = { styleText: '' }; // sera rechargé depuis la table settings
 let contentSettings = { explicitLevel: 'mature' }; // 'safe' | 'mature' | 'fade'
@@ -1936,6 +1945,7 @@ app.post('/api/rp-ia', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
