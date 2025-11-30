@@ -459,6 +459,31 @@ app.get('/api/pnjs/resolve', async (req, res) => {
     return res.status(500).json({ matches: [], exact: false, message: 'DB error' });
   }
 });
+// Recherche simple par nom (friendly GPT)
+app.get('/api/pnjs/by-name', async (req, res) => {
+  const q = (req.query.q || '').toString().trim();
+  if (!q) return res.json({ matches: [] });
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT data FROM pnjs
+       WHERE lower(data->>'name') LIKE lower($1)
+       ORDER BY data->>'name'
+       LIMIT 20`,
+      [`%${q}%`]
+    );
+
+    const matches = rows.map(r => ({
+      id: r.data.id,
+      name: r.data.name,
+    }));
+
+    res.json({ matches });
+  } catch (e) {
+    console.error('GET /api/pnjs/by-name error:', e);
+    res.status(500).json({ matches: [], message: 'DB error' });
+  }
+});
 
 // =================== ENGINE (contexte pour GPT) ====================
 
@@ -994,3 +1019,4 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
