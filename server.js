@@ -1014,10 +1014,36 @@ app.get('/', (req, res) => {
     ],
   });
 });
+// Recherche par nom avec chemin sans ambiguïté (pour GPT)
+app.get('/api/pnjs/search/by-name', async (req, res) => {
+  const q = (req.query.q || '').toString().trim();
+  if (!q) return res.json({ matches: [] });
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT data FROM pnjs
+       WHERE lower(data->>'name') LIKE lower($1)
+       ORDER BY data->>'name'
+       LIMIT 20`,
+      [`%${q}%`]
+    );
+
+    const matches = rows.map(r => ({
+      id: r.data.id,
+      name: r.data.name,
+    }));
+
+    res.json({ matches });
+  } catch (e) {
+    console.error('GET /api/pnjs/search/by-name error:', e);
+    res.status(500).json({ matches: [], message: 'DB error' });
+  }
+});
 
 // ---------------- Lancement ----------------
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
