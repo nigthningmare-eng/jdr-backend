@@ -1039,11 +1039,50 @@ app.get('/api/pnjs/search/by-name', async (req, res) => {
     res.status(500).json({ matches: [], message: 'DB error' });
   }
 });
+// =================== MEMORY PERSISTANTE ====================
+
+// SAVE MEMORY
+app.post('/api/memory/save', async (req, res) => {
+  const { sid = "main", key, value } = req.body;
+  if (!key || !value) {
+    return res.status(400).json({ ok: false, message: "key/value manquant" });
+  }
+
+  try {
+    await pool.query(
+      `INSERT INTO memories (sid, key, value)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (sid, key) DO UPDATE SET value = $3, updated_at = NOW()`,
+      [sid, key, value]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('POST /api/memory/save error:', e);
+    res.status(500).json({ ok: false, message: "DB error" });
+  }
+});
+
+// GET MEMORY
+app.get('/api/memory/get', async (req, res) => {
+  const sid = req.query.sid || "main";
+
+  try {
+    const { rows } = await pool.query(
+      `SELECT key, value FROM memories WHERE sid = $1`,
+      [sid]
+    );
+    res.json({ memories: rows });
+  } catch (e) {
+    console.error('GET /api/memory/get error:', e);
+    res.status(500).json({ memories: [], message: "DB error" });
+  }
+});
 
 // ---------------- Lancement ----------------
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
