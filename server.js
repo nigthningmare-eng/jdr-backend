@@ -1079,7 +1079,6 @@ app.get('/api/memory/get', async (req, res) => {
 });
 app.post("/v1/chat/completions", async (req, res) => {
   try {
-    // Auth (optionnel mais recommandé)
     const auth = req.headers.authorization || "";
     const key = auth.startsWith("Bearer ") ? auth.slice(7) : "";
     if (process.env.ST_API_KEY && key !== process.env.ST_API_KEY) {
@@ -1089,29 +1088,27 @@ app.post("/v1/chat/completions", async (req, res) => {
     const { messages = [] } = req.body || {};
     const lastUser = [...messages].reverse().find(m => m?.role === "user")?.content || "";
 
-    // TODO: ici tu appelles TON moteur (Ollama / ton /api/engine/context / etc.)
-  const reply = `✅ OK, je te reçois.
+    // ✅ Réponse de test (pour vérifier SillyTavern)
+    const replyText = `✅ OK, je te reçois.
 Scène d’ouverture : une brume froide s’accroche aux ruines, des torches s’allument au loin.
+Tu entends un pas derrière toi.
 Que fais-tu ?`;
 
-
-    // Réponse au format attendu par SillyTavern
     return res.json({
-      id: "chatcmpl_dummy",
-      object: "chat.completion",
+      id: 'chatcmpl_st',
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: req.body?.model || 'proxy',
       choices: [
-        { index: 0, message: { role: "assistant", content: reply }, finish_reason: "stop" }
+        { index: 0, message: { role: 'assistant', content: replyText }, finish_reason: 'stop' }
       ],
     });
   } catch (e) {
     console.error(e);
-    res.status(500).json({ error: { message: "Server error" } });
+    return res.status(500).json({ error: { message: "Server error" } });
   }
 });
 
-async function runYourMJ(userText) {
-  return `MJ: Bien reçu -> ${userText}`;
-}
 // =================== OpenAI-compatible: models (pour SillyTavern) ===================
 app.get('/v1/models', (req, res) => {
   // Optionnel: même auth que chat/completions
@@ -1138,6 +1135,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
