@@ -1090,7 +1090,10 @@ app.post("/v1/chat/completions", async (req, res) => {
     const lastUser = [...messages].reverse().find(m => m?.role === "user")?.content || "";
 
     // TODO: ici tu appelles TON moteur (Ollama / ton /api/engine/context / etc.)
-    const reply = await runYourMJ(lastUser);
+  const reply = `✅ OK, je te reçois.
+Scène d’ouverture : une brume froide s’accroche aux ruines, des torches s’allument au loin.
+Que fais-tu ?`;
+
 
     // Réponse au format attendu par SillyTavern
     return res.json({
@@ -1135,6 +1138,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
