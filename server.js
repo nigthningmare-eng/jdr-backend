@@ -1109,11 +1109,33 @@ app.post("/v1/chat/completions", async (req, res) => {
 async function runYourMJ(userText) {
   return `MJ: Bien reçu -> ${userText}`;
 }
+// =================== OpenAI-compatible: models (pour SillyTavern) ===================
+app.get('/v1/models', (req, res) => {
+  // Optionnel: même auth que chat/completions
+  const auth = req.headers.authorization || '';
+  const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  const key = bearer || (req.headers['x-api-key'] || '');
+  const expected = process.env.ST_API_KEY || '';
+
+  if (expected && String(key) !== String(expected)) {
+    return res.status(401).json({ error: { message: 'Unauthorized' } });
+  }
+
+  res.json({
+    object: 'list',
+    data: [
+      { id: 'gpt-3.5-turbo', object: 'model' },
+      { id: 'gpt-4-turbo', object: 'model' },
+      { id: 'mj-engine', object: 'model' }
+    ]
+  });
+});
 
 // ---------------- Lancement ----------------
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
