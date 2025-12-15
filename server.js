@@ -1077,11 +1077,44 @@ app.get('/api/memory/get', async (req, res) => {
     res.status(500).json({ memories: [], message: "DB error" });
   }
 });
+app.post("/v1/chat/completions", async (req, res) => {
+  try {
+    // Auth (optionnel mais recommandé)
+    const auth = req.headers.authorization || "";
+    const key = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (process.env.ST_API_KEY && key !== process.env.ST_API_KEY) {
+      return res.status(401).json({ error: { message: "Unauthorized" } });
+    }
+
+    const { messages = [] } = req.body || {};
+    const lastUser = [...messages].reverse().find(m => m?.role === "user")?.content || "";
+
+    // TODO: ici tu appelles TON moteur (Ollama / ton /api/engine/context / etc.)
+    const reply = await runYourMJ(lastUser);
+
+    // Réponse au format attendu par SillyTavern
+    return res.json({
+      id: "chatcmpl_dummy",
+      object: "chat.completion",
+      choices: [
+        { index: 0, message: { role: "assistant", content: reply }, finish_reason: "stop" }
+      ],
+    });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: { message: "Server error" } });
+  }
+});
+
+async function runYourMJ(userText) {
+  return `MJ: Bien reçu -> ${userText}`;
+}
 
 // ---------------- Lancement ----------------
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
