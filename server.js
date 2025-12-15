@@ -1085,22 +1085,40 @@ app.post("/v1/chat/completions", async (req, res) => {
       return res.status(401).json({ error: { message: "Unauthorized" } });
     }
 
-    const { messages = [] } = req.body || {};
+    const body = req.body || {};
+    const messages = Array.isArray(body.messages) ? body.messages : [];
     const lastUser = [...messages].reverse().find(m => m?.role === "user")?.content || "";
 
-    // ✅ Réponse de test (pour vérifier SillyTavern)
-    const replyText = `✅ OK, je te reçois.
-Scène d’ouverture : une brume froide s’accroche aux ruines, des torches s’allument au loin.
-Tu entends un pas derrière toi.
-Que fais-tu ?`;
+    // ✅ pour l’instant: réponse de test (tu remplaceras ensuite par ton vrai MJ IA)
+    const replyText = `✅ OK, je te reçois.\nTu dis: "${lastUser}"\nQue fais-tu ?`;
 
+    // --- STREAMING (SillyTavern aime ça) ---
+    if (body.stream === true) {
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("Connection", "keep-alive");
+
+      const chunk = {
+        id: "chatcmpl_st",
+        object: "chat.completion.chunk",
+        created: Math.floor(Date.now() / 1000),
+        model: body.model || "proxy",
+        choices: [{ index: 0, delta: { content: replyText }, finish_reason: null }],
+      };
+
+      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      res.write(`data: [DONE]\n\n`);
+      return res.end();
+    }
+
+    // --- NON-STREAM ---
     return res.json({
-      id: 'chatcmpl_st',
-      object: 'chat.completion',
+      id: "chatcmpl_st",
+      object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
-      model: req.body?.model || 'proxy',
+      model: body.model || "proxy",
       choices: [
-        { index: 0, message: { role: 'assistant', content: replyText }, finish_reason: 'stop' }
+        { index: 0, message: { role: "assistant", content: replyText }, finish_reason: "stop" }
       ],
     });
   } catch (e) {
@@ -1108,6 +1126,7 @@ Que fais-tu ?`;
     return res.status(500).json({ error: { message: "Server error" } });
   }
 });
+
 
 // =================== OpenAI-compatible: models (pour SillyTavern) ===================
 app.get('/v1/models', (req, res) => {
@@ -1135,6 +1154,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
