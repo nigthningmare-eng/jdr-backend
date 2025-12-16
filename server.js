@@ -2,6 +2,7 @@
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
+const crypto = require('crypto'); // ✅ AJOUT
 const { Pool } = require('pg');
 
 require('dotenv').config();
@@ -20,8 +21,14 @@ app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
 // ---------- DB ----------
 
-// Pour debug sur Render / local
-console.log('DATABASE_URL =', process.env.DATABASE_URL);
+// ⚠️ Évite de logger DATABASE_URL complet en prod (ça contient user/pass)
+// Si tu veux garder un log, log juste le host:
+try {
+  const u = new URL(process.env.DATABASE_URL || '');
+  console.log('DB host =', u.host);
+} catch {
+  console.log('DB configured =', Boolean(process.env.DATABASE_URL));
+}
 
 const shouldUseSSL =
   process.env.DATABASE_URL &&
@@ -50,6 +57,34 @@ function deepMerge(base, update) {
   return update === undefined ? base : update;
 }
 
+// ✅ AJOUT : helper de sécurité pour commit/patch GPT
+function stripLockedPatch(current, patch) {
+  const locked = new Set(
+    Array.isArray(current?.lockedTraits)
+      ? current.lockedTraits.map(String)
+      : []
+  );
+
+  if (!patch || typeof patch !== 'object') return patch;
+
+  const cleaned = Array.isArray(patch) ? [...patch] : { ...patch };
+
+  // Respect des traits verrouillés (top-level)
+  for (const key of Object.keys(cleaned)) {
+    if (locked.has(key)) delete cleaned[key];
+  }
+
+  // garde-fous anti-destruction
+  if ('id' in cleaned) delete cleaned.id;
+  if ('name' in cleaned) {
+    const n = cleaned.name;
+    if (n == null || !String(n).trim()) delete cleaned.name;
+    else cleaned.name = String(n).trim();
+  }
+
+  return cleaned;
+}
+
 function fingerprint(text = '') {
   const s = String(text).toLowerCase().replace(/\s+/g, ' ').slice(0, 500);
   let h = 0;
@@ -71,6 +106,10 @@ const DECOR_EMOJIS = [
   '🙂','😏','😠','🤔','🤗','😇','😎','🤨','🥴','🤡',
   '🔥','⚔️','❄️','🌸','🦊','🐉','🦋','🛡️','📜','💫'
 ];
+
+// ... le reste inchangé
+
+
 
 function decorateEmojiForPnj(p) {
   const traits = Array.isArray(p.personalityTraits) ? p.personalityTraits.map(t => t.toLowerCase()) : [];
@@ -221,6 +260,8 @@ async function hydrateSessionPnjs(sess) {
 
 // =================== PNJ (PostgreSQL) ====================
 
+
+
 // LISTE
 app.get('/api/pnjs', async (req, res) => {
   res.set('Content-Type', 'application/json; charset=utf-8');
@@ -261,7 +302,7 @@ app.get('/api/pnjs', async (req, res) => {
       const pickSet = new Set(fields.split(',').map(s => s.trim()).filter(Boolean));
       items = items.map(p => {
         const out = {};
-        for (const k of pickSet) out[k] = p[k];
+        for (const k of pickSet) out[k] = p?.[k];
         return out;
       });
     }
@@ -273,96 +314,8 @@ app.get('/api/pnjs', async (req, res) => {
   }
 });
 
-// GET par id
-app.get('/api/pnjs/:id', async (req, res) => {
-  try {
-    const id = req.params.id;
-    const r = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
-    if (!r.rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
-    res.json(r.rows[0].data);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'DB error' });
-  }
-});
 
-// CREATE (upsert simple)
-app.post('/api/pnjs', async (req, res) => {
-  try {
-    const p = req.body || {};
-    p.id = p.id || Date.now().toString();
-    if (!p.level) p.level = 1;
-    if (!Number.isFinite(p.xp)) p.xp = 0;
-    p.stats = p.stats || {};
-    await pool.query(
-      'INSERT INTO pnjs (id, data) VALUES ($1, $2::jsonb) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data',
-      [p.id, JSON.stringify(p)]
-    );
-    res.status(201).json(p);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'DB error' });
-  }
-});
-
-// PATCH (deep merge, respecte lockedTraits)
-app.patch('/api/pnjs/:id', async (req, res) => {
-  try {
-    const id = req.params.id;
-    const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
-    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
-    const current = rows[0].data;
-    const incoming = req.body || {};
-    const locks = new Set(current.lockedTraits || []);
-    for (const f of locks) if (f in incoming) delete incoming[f];
-    const merged = deepMerge(current, incoming);
-    await pool.query(
-      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
-      [id, JSON.stringify(merged)]
-    );
-    res.json(merged);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'DB error' });
-  }
-});
-
-// PUT (shallow merge, respecte lockedTraits)
-app.put('/api/pnjs/:id', async (req, res) => {
-  try {
-    const id = req.params.id;
-    const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
-    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
-    const current = rows[0].data;
-    const incoming = req.body || {};
-    const locks = new Set(current.lockedTraits || []);
-    for (const f of locks) if (f in incoming) delete incoming[f];
-    const merged = { ...current, ...incoming, id };
-    await pool.query(
-      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
-      [id, JSON.stringify(merged)]
-    );
-    res.json(merged);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'DB error' });
-  }
-});
-
-// DELETE unitaire
-app.delete('/api/pnjs/:id', async (req, res) => {
-  try {
-    const id = req.params.id;
-    const r = await pool.query('DELETE FROM pnjs WHERE id = $1 RETURNING data', [id]);
-    if (!r.rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
-    res.json({ deleted: r.rows[0].data });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ message: 'DB error' });
-  }
-});
-
-// Resolve name (pour actions GPT)
+// ✅ Resolve name (DOIT être avant /:id)
 app.get('/api/pnjs/resolve', async (req, res) => {
   res.set('Content-Type', 'application/json; charset=utf-8');
   const raw = (req.query.name || '').toString().trim();
@@ -383,62 +336,63 @@ app.get('/api/pnjs/resolve', async (req, res) => {
 
   try {
     let rows = [];
-    try {
+
+    // 1) exact brut
+    rows = (await pool.query(
+      `SELECT data FROM pnjs
+       WHERE trim(lower(data->>'name')) = trim(lower($1))
+       LIMIT 1`,
+      [raw]
+    )).rows;
+
+    // 2) prefix normalisé
+    if (!rows.length) {
       rows = (await pool.query(
         `SELECT data FROM pnjs
-         WHERE trim(lower(data->>'name')) = trim(lower($1))
-         LIMIT 1`,
-        [raw]
+         WHERE lower(data->>'name') LIKE lower($1)
+         ORDER BY data->>'name'
+         LIMIT 30`,
+        [norm + '%']
       )).rows;
-    } catch {}
-    if (!rows.length) {
-      try {
-        rows = (await pool.query(
-          `SELECT data FROM pnjs
-           WHERE lower(data->>'name') LIKE lower($1)
-           ORDER BY data->>'name'
-           LIMIT 30`,
-          [norm + '%']
-        )).rows;
-      } catch {}
     }
+
+    // 3) tokens AND
     if (!rows.length) {
       const tokens = norm.toLowerCase().split(/\s+/).filter(Boolean);
       if (tokens.length) {
         const wheres = tokens.map((_, i) => `lower(data->>'name') LIKE $${i+1}`);
         const params = tokens.map(t => `%${t}%`);
-        try {
-          rows = (await pool.query(
-            `SELECT data FROM pnjs
-             WHERE ${wheres.join(' AND ')}
-             ORDER BY data->>'name'
-             LIMIT 50`,
-            params
-          )).rows;
-        } catch {}
-      }
-    }
-    if (!rows.length) {
-      try {
         rows = (await pool.query(
           `SELECT data FROM pnjs
-           WHERE lower(data->>'name') LIKE lower($1)
+           WHERE ${wheres.join(' AND ')}
            ORDER BY data->>'name'
            LIMIT 50`,
-          [`%${norm}%`]
+          params
         )).rows;
-      } catch {}
+      }
+    }
+
+    // 4) contains
+    if (!rows.length) {
+      rows = (await pool.query(
+        `SELECT data FROM pnjs
+         WHERE lower(data->>'name') LIKE lower($1)
+         ORDER BY data->>'name'
+         LIMIT 50`,
+        [`%${norm}%`]
+      )).rows;
     }
 
     const qKey = toKey(norm);
     const qTokens = qKey.split(/\s+/).filter(Boolean);
+
     const score = (name) => {
       const k = toKey(name);
       const tokens = k.split(/\s+/).filter(Boolean);
       const starts = k.startsWith(qKey) ? 50 : 0;
       const exact  = (k === qKey) ? 100 : 0;
       const allAnd = qTokens.every(t => k.includes(t)) ? 20 : 0;
-      const firstMatch = (tokens[0] === qTokens[0]) ? 15 : 0;
+      const firstMatch = (tokens[0] && qTokens[0] && tokens[0] === qTokens[0]) ? 15 : 0;
       const lenPenalty = Math.min(10, Math.abs(k.length - qKey.length));
       return exact + starts + firstMatch + allAnd - lenPenalty;
     };
@@ -448,10 +402,14 @@ app.get('/api/pnjs/resolve', async (req, res) => {
       if (!r?.data?.id) continue;
       if (!dedup.has(r.data.id)) dedup.set(r.data.id, r.data);
     }
+
     const candidates = Array.from(dedup.values());
     candidates.sort((a, b) => score(b.name) - score(a.name));
 
-    const matches = candidates.map(p => ({ id: String(p.id), name: String(p.name || '') })).slice(0, 10);
+    const matches = candidates
+      .map(p => ({ id: String(p.id), name: String(p.name || '') }))
+      .slice(0, 10);
+
     const exact = matches.some(m => toKey(m.name) === qKey);
     return res.status(200).json({ matches, exact });
   } catch (e) {
@@ -459,7 +417,9 @@ app.get('/api/pnjs/resolve', async (req, res) => {
     return res.status(500).json({ matches: [], exact: false, message: 'DB error' });
   }
 });
-// Recherche simple par nom (friendly GPT)
+
+
+// ✅ Recherche simple par nom (friendly GPT) (DOIT être avant /:id)
 app.get('/api/pnjs/by-name', async (req, res) => {
   const q = (req.query.q || '').toString().trim();
   if (!q) return res.json({ matches: [] });
@@ -473,10 +433,9 @@ app.get('/api/pnjs/by-name', async (req, res) => {
       [`%${q}%`]
     );
 
-    const matches = rows.map(r => ({
-      id: r.data.id,
-      name: r.data.name,
-    }));
+    const matches = rows
+      .map(r => ({ id: r?.data?.id, name: r?.data?.name }))
+      .filter(m => m.id);
 
     res.json({ matches });
   } catch (e) {
@@ -484,6 +443,141 @@ app.get('/api/pnjs/by-name', async (req, res) => {
     res.status(500).json({ matches: [], message: 'DB error' });
   }
 });
+
+
+// ✅ GET par id (APRÈS les routes statiques)
+// Garde-fou : si quelqu’un appelle /api/pnjs/resolve par erreur, on renvoie 404 proprement.
+app.get('/api/pnjs/:id', async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+
+    // optionnel mais utile pour éviter les collisions si l’ordre est un jour cassé
+    if (id === 'resolve' || id === 'by-name' || id === 'search') {
+      return res.status(404).json({ message: 'Route PNJ invalide.' });
+    }
+
+    const r = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (!r.rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
+    res.json(r.rows[0].data);
+  } catch (e) {
+    console.error('GET /api/pnjs/:id error:', e);
+    res.status(500).json({ message: 'DB error' });
+  }
+});
+
+
+// ✅ CREATE (INSERT only, pas d’upsert silencieux, UUID par défaut)
+app.post('/api/pnjs', async (req, res) => {
+  try {
+    const p = req.body || {};
+
+    // id robuste
+    p.id = (p.id && String(p.id).trim()) ? String(p.id).trim() : crypto.randomUUID();
+
+    // garde-fous minimum (évite PNJ "invisible")
+    if (!p.name || !String(p.name).trim()) {
+      return res.status(400).json({ message: "Champ 'name' obligatoire." });
+    }
+    p.name = String(p.name).trim();
+
+    if (!p.level) p.level = 1;
+    if (!Number.isFinite(p.xp)) p.xp = 0;
+    p.stats = p.stats || {};
+
+    await pool.query(
+      'INSERT INTO pnjs (id, data) VALUES ($1, $2::jsonb)',
+      [p.id, JSON.stringify(p)]
+    );
+
+    res.status(201).json(p);
+  } catch (e) {
+    // 23505 = unique_violation (id déjà existant)
+    if (e && e.code === '23505') {
+      return res.status(409).json({ message: "ID déjà existant. Utilise PUT/PATCH pour modifier, pas POST." });
+    }
+    console.error('POST /api/pnjs error:', e);
+    res.status(500).json({ message: 'DB error' });
+  }
+});
+
+
+// PATCH (deep merge, respecte lockedTraits)
+app.patch('/api/pnjs/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
+
+    const current = rows[0].data;
+    const incoming = req.body || {};
+
+    // protection: on ne change jamais l'id, et on évite name null/vide
+    if ('id' in incoming) delete incoming.id;
+    if ('name' in incoming && (incoming.name == null || !String(incoming.name).trim())) delete incoming.name;
+
+    const locks = new Set(current.lockedTraits || []);
+    for (const f of locks) if (f in incoming) delete incoming[f];
+
+    const merged = deepMerge(current, incoming);
+
+    await pool.query(
+      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
+      [id, JSON.stringify(merged)]
+    );
+
+    res.json(merged);
+  } catch (e) {
+    console.error('PATCH /api/pnjs/:id error:', e);
+    res.status(500).json({ message: 'DB error' });
+  }
+});
+
+
+// PUT (shallow merge, respecte lockedTraits)
+app.put('/api/pnjs/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
+
+    const current = rows[0].data;
+    const incoming = req.body || {};
+
+    // protection: on ne change jamais l'id, et on évite name null/vide
+    if ('id' in incoming) delete incoming.id;
+    if ('name' in incoming && (incoming.name == null || !String(incoming.name).trim())) delete incoming.name;
+
+    const locks = new Set(current.lockedTraits || []);
+    for (const f of locks) if (f in incoming) delete incoming[f];
+
+    const merged = { ...current, ...incoming, id };
+
+    await pool.query(
+      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
+      [id, JSON.stringify(merged)]
+    );
+
+    res.json(merged);
+  } catch (e) {
+    console.error('PUT /api/pnjs/:id error:', e);
+    res.status(500).json({ message: 'DB error' });
+  }
+});
+
+
+// DELETE unitaire
+app.delete('/api/pnjs/:id', async (req, res) => {
+  try {
+    const id = req.params.id;
+    const r = await pool.query('DELETE FROM pnjs WHERE id = $1 RETURNING data', [id]);
+    if (!r.rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
+    res.json({ deleted: r.rows[0].data });
+  } catch (e) {
+    console.error('DELETE /api/pnjs/:id error:', e);
+    res.status(500).json({ message: 'DB error' });
+  }
+});
+
 
 // =================== ENGINE (contexte pour GPT) ====================
 
@@ -916,23 +1010,35 @@ app.post('/api/engine/commit', async (req, res) => {
         sess.data.notes = sess.data.notes.slice(-50);
       }
     }
+// updates PNJ
+if (pnjUpdates.length) {
+  for (const upd of pnjUpdates) {
+    const id = String(upd.id || '').trim();
+    const patch = upd.patch || {};
+    if (!id) continue;
 
-    // updates PNJ
-    if (pnjUpdates.length) {
-      for (const upd of pnjUpdates) {
-        const id = String(upd.id || '').trim();
-        const patch = upd.patch || {};
-        if (!id) continue;
-        const r = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
-        if (!r.rows.length) continue;
-        const current = r.rows[0].data;
-        const merged = deepMerge(current, patch);
-        await pool.query(
-          'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
-          [id, JSON.stringify(merged)]
-        );
-      }
+    const r = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
+    if (!r.rows.length) continue;
+
+    const current = r.rows[0].data;
+    const filteredPatch = stripLockedPatch(current, patch);
+
+    // si patch devient vide -> on skip
+    if (!filteredPatch || (typeof filteredPatch === 'object' && !Array.isArray(filteredPatch) && Object.keys(filteredPatch).length === 0)) {
+      continue;
     }
+
+    const merged = deepMerge(current, filteredPatch);
+
+    await pool.query(
+      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
+      [id, JSON.stringify(merged)]
+    );
+
+    console.log('[JDR][COMMIT] pnj updated', { sid, id, keys: Object.keys(filteredPatch || {}) });
+  }
+}
+
 
     // lock de traits
     if (lock && lock.id && Array.isArray(lock.fields) && lock.fields.length) {
@@ -1149,11 +1255,28 @@ app.get('/v1/models', (req, res) => {
     ]
   });
 });
+app.get('/api/db/whoami', async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT
+        current_database() as db,
+        current_user as usr,
+        inet_server_addr() as server_addr,
+        inet_server_port() as server_port,
+        version() as version
+    `);
+    res.json({ ok: true, ...r.rows[0] });
+  } catch (e) {
+    console.error('GET /api/db/whoami error:', e);
+    res.status(500).json({ ok: false, message: 'DB error' });
+  }
+});
 
 // ---------------- Lancement ----------------
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
