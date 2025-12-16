@@ -260,6 +260,30 @@ async function hydrateSessionPnjs(sess) {
 
 // =================== PNJ (PostgreSQL) ====================
 
+app.get('/api/pnjs/names', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit || '100', 10), 1000);
+  const offset = Math.max(parseInt(req.query.offset || '0', 10), 0);
+
+  const totalR = await pool.query('SELECT COUNT(*)::int AS n FROM pnjs');
+  const total = totalR.rows[0].n;
+
+  const r = await pool.query(
+    `SELECT data->>'id' AS id, data->>'name' AS name
+     FROM pnjs
+     ORDER BY (data->>'name') NULLS LAST, id
+     LIMIT $1 OFFSET $2`,
+    [limit, offset]
+  );
+
+  res.json({
+    total,
+    limit,
+    offset,
+    hasMore: offset + r.rows.length < total,
+    items: r.rows.map(x => ({ id: x.id, name: x.name }))
+  });
+});
+
 
 
 // LISTE
@@ -1276,6 +1300,7 @@ app.get('/api/db/whoami', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
