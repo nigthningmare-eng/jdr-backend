@@ -529,84 +529,108 @@ app.post('/api/pnjs', async (req, res) => {
 });
 
 
-// PATCH (deep merge, respecte lockedTraits)
+// Remplacez app.patch('/api/pnjs/:id') et app.put('/api/pnjs/:id')
 app.patch('/api/pnjs/:id', async (req, res) => {
   try {
-    const id = req.params.id;
-    const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    const id = req.params.id.trim();
+    const rows = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
     if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
 
     const current = rows[0].data;
-    const incoming = req.body || {};
+    let incoming = req.body;
 
-    // protection: on ne change jamais l'id, et on évite name null/vide
-    if ('id' in incoming) delete incoming.id;
-    if ('name' in incoming && (incoming.name == null || !String(incoming.name).trim())) delete incoming.name;
+    // Support explicite des formats GPT confus
+    if (incoming.patch && typeof incoming.patch === 'object') {
+      console.log('JDR DEBUG: Format patch détecté, aplatissement...');
+      incoming = { ...incoming.patch };
+    }
+    if (incoming.id) delete incoming.id; // id URL only
 
+    // Nettoyage standard (nom, verrous)
+    if ('name' in incoming) {
+      incoming.name = incoming.name ? String(incoming.name).trim() : null;
+      if (!incoming.name) delete incoming.name;
+    }
     const locks = new Set(current.lockedTraits || []);
     for (const f of locks) if (f in incoming) delete incoming[f];
 
+    // Merge profond PATCH
     const merged = deepMerge(current, incoming);
-
-    await pool.query(
-      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
-      [id, JSON.stringify(merged)]
-    );
-
+    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
+    
     res.json(merged);
   } catch (e) {
-    console.error('PATCH /api/pnjs/:id error:', e);
+    console.error('PATCH /api/pnjs/:id error', e);
     res.status(500).json({ message: 'DB error' });
   }
 });
 
-
-// PUT (shallow merge, respecte lockedTraits)
 app.put('/api/pnjs/:id', async (req, res) => {
   try {
-    const id = req.params.id;
-    const { rows } = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    const id = req.params.id.trim();
+    const rows = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
     if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
 
     const current = rows[0].data;
-    const incoming = req.body || {};
+    let incoming = req.body;
 
-    // protection: on ne change jamais l'id, et on évite name null/vide
-    if ('id' in incoming) delete incoming.id;
-    if ('name' in incoming && (incoming.name == null || !String(incoming.name).trim())) delete incoming.name;
+    // Support explicite des formats GPT confus (comme PATCH)
+    if (incoming.patch && typeof incoming.patch === 'object') {
+      console.log('JDR DEBUG: Format patch détecté sur PUT, aplatissement...');
+      incoming = { ...incoming.patch };
+    }
+    if (incoming.id) delete incoming.id;
 
+    // Nettoyage standard
+    if ('name' in incoming) {
+      incoming.name = incoming.name ? String(incoming.name).trim() : null;
+      if (!incoming.name) delete incoming.name;
+    }
+    const locks = new Set(current.lockedTraits || []);
+    for (const f of locks) if (f in incoming) delete incoming[f];
+
+    // Shallow replace PUT
+    const merged = { ...current, ...incoming, id };
+    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
+    
+    res.json(merged);
+  } catch (e) {
+    console.error('PUT /api/pnjs/:id error', e);
+    res.status(500).json({ message: 'DB error' });
+  }
+});
+
+app.put('/api/pnjs/:id', async (req, res) => {
+  try {
+    const id = req.params.id.trim();
+    const rows = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
+
+    const current = rows[0].data || {};
+    let incoming = (req.body && typeof req.body === 'object') ? req.body : {};
+
+    if (incoming.patch && typeof incoming.patch === 'object') {
+      console.log('JDR DEBUG: Format patch détecté sur PUT, aplatissement...');
+      incoming = { ...incoming.patch };
+    }
+    if (incoming.id) delete incoming.id;
+
+    if ('name' in incoming) {
+      incoming.name = incoming.name ? String(incoming.name).trim() : null;
+      if (!incoming.name) delete incoming.name;
+    }
     const locks = new Set(current.lockedTraits || []);
     for (const f of locks) if (f in incoming) delete incoming[f];
 
     const merged = { ...current, ...incoming, id };
-
-    await pool.query(
-      'UPDATE pnjs SET data = $2::jsonb WHERE id = $1',
-      [id, JSON.stringify(merged)]
-    );
+    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
 
     res.json(merged);
   } catch (e) {
-    console.error('PUT /api/pnjs/:id error:', e);
+    console.error('PUT /api/pnjs/:id error', e);
     res.status(500).json({ message: 'DB error' });
   }
 });
-
-
-// DELETE unitaire
-app.delete('/api/pnjs/:id', async (req, res) => {
-  try {
-    const id = req.params.id;
-    const r = await pool.query('DELETE FROM pnjs WHERE id = $1 RETURNING data', [id]);
-    if (!r.rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
-    res.json({ deleted: r.rows[0].data });
-  } catch (e) {
-    console.error('DELETE /api/pnjs/:id error:', e);
-    res.status(500).json({ message: 'DB error' });
-  }
-});
-
-
 // =================== ENGINE (contexte pour GPT) ====================
 
 // preload PNJ dans session
@@ -903,17 +927,22 @@ STYLE PERSONNALISÉ DU MJ (OPTIONNEL) :
 ${narrativeStyle?.styleText || '(aucun style personnalisé défini pour le moment)'}
 `.trim();
 
-    const pnjDetails = pnjs.slice(0, 50).map(p => ({
-      id: p.id,
-      name: p.name,
-      appearance: p.appearance,
-      personalityTraits: p.personalityTraits,
-      backstory: p.backstory,
-      raceName: p.raceName || p.raceId,
-      relations: p.relations || p.relationships || null,
-      locationId: p.locationId,
-      lockedTraits: p.lockedTraits || [],
-    }));
+const pnjDetails = pnjs.slice(0, 50).map(p => ({
+  id: p.id,
+  name: p.name,
+  appearance: p.appearance ?? null,
+  personalityTraits: Array.isArray(p.personalityTraits) ? p.personalityTraits : [],
+  backstory: p.backstory ?? '',
+  raceName: p.raceName || p.raceId || null,
+  relations: p.relations || p.relationships || null,
+  locationId: p.locationId ?? null,
+  lockedTraits: Array.isArray(p.lockedTraits) ? p.lockedTraits : [],
+  skills: Array.isArray(p.skills) ? p.skills : [],
+  magics: Array.isArray(p.magics) ? p.magics : [],
+  weaponTechniques: Array.isArray(p.weaponTechniques) ? p.weaponTechniques : []
+}));
+
+
 
     const anchors = dossiers
       .map(d => `- ${d.name}#${d.id} :: ${d.coreFacts.join(' | ')}`)
@@ -1304,6 +1333,7 @@ app.get('/api/db/whoami', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
