@@ -538,7 +538,7 @@ app.patch('/api/pnjs/:id', async (req, res) => {
     const rows = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
     if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
 
-    const current = rows.data || {};
+    const current = rows[0].data || {};
     let incoming = (req.body && typeof req.body === 'object') ? req.body : {};
 
     // Support format { patch: { ... } }
@@ -547,11 +547,10 @@ app.patch('/api/pnjs/:id', async (req, res) => {
       incoming = { ...incoming.patch };
     }
 
-    // Admin override pour déverrouiller les lockedTraits
+    // Admin override AVANT de traiter les locks
     const isAdminOverride = incoming.adminOverride === true;
     if (isAdminOverride) {
       console.log('JDR DEBUG: Admin override activé pour PATCH');
-      delete incoming.adminOverride; // Ne pas persister ce flag
     }
 
     if (incoming.id) delete incoming.id;
@@ -566,6 +565,9 @@ app.patch('/api/pnjs/:id', async (req, res) => {
       const locks = new Set(current.lockedTraits || []);
       for (const f of locks) if (f in incoming) delete incoming[f];
     }
+
+    // APRÈS avoir filtré, on supprime le flag
+    delete incoming.adminOverride;
 
     const merged = deepMerge(current, incoming);
     await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
@@ -1332,6 +1334,7 @@ app.get('/api/db/whoami', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
