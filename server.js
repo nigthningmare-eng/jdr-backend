@@ -19,6 +19,10 @@ app.use(cors());
 app.use(express.json({ limit: '15mb' }));
 app.use(express.urlencoded({ extended: true, limit: '15mb' }));
 
+app.get('/api/turn/sync', (req, res) => {
+  res.json({ ok: true, ts: new Date().toISOString() });
+});
+
 // ---------- DB ----------
 
 // ⚠️ Évite de logger DATABASE_URL complet en prod (ça contient user/pass)
@@ -1300,6 +1304,7 @@ app.get('/api/db/whoami', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
