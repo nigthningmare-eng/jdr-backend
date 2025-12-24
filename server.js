@@ -62,32 +62,34 @@ function deepMerge(base, update) {
 }
 
 // ✅ AJOUT : helper de sécurité pour commit/patch GPT
-function stripLockedPatch(current, patch) {
+function stripLockedPatch(current, patch, isAdminOverride = false) {
+  if (!patch || typeof patch !== 'object') return {};
+  
+  const cleaned = { ...patch };
+  
+  // Admin override = pas de filtrage
+  if (isAdminOverride) {
+    console.log('JDR DEBUG: Admin override activé dans stripLockedPatch');
+    return cleaned;
+  }
+
+  // Sinon, filtrer les lockedTraits
   const locked = new Set(
     Array.isArray(current?.lockedTraits)
       ? current.lockedTraits.map(String)
       : []
   );
 
-  if (!patch || typeof patch !== 'object') return patch;
-
-  const cleaned = Array.isArray(patch) ? [...patch] : { ...patch };
-
-  // Respect des traits verrouillés (top-level)
   for (const key of Object.keys(cleaned)) {
-    if (locked.has(key)) delete cleaned[key];
-  }
-
-  // garde-fous anti-destruction
-  if ('id' in cleaned) delete cleaned.id;
-  if ('name' in cleaned) {
-    const n = cleaned.name;
-    if (n == null || !String(n).trim()) delete cleaned.name;
-    else cleaned.name = String(n).trim();
+    if (locked.has(key)) {
+      console.log(`JDR DEBUG: Champ verrouillé ignoré : ${key}`);
+      delete cleaned[key];
+    }
   }
 
   return cleaned;
 }
+
 
 function fingerprint(text = '') {
   const s = String(text).toLowerCase().replace(/\s+/g, ' ').slice(0, 500);
@@ -536,28 +538,38 @@ app.patch('/api/pnjs/:id', async (req, res) => {
     const rows = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
     if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
 
-    const current = rows[0].data;
-    let incoming = req.body;
+    const current = rows.data || {};
+    let incoming = (req.body && typeof req.body === 'object') ? req.body : {};
 
-    // Support explicite des formats GPT confus
+    // Support format { patch: { ... } }
     if (incoming.patch && typeof incoming.patch === 'object') {
       console.log('JDR DEBUG: Format patch détecté, aplatissement...');
       incoming = { ...incoming.patch };
     }
-    if (incoming.id) delete incoming.id; // id URL only
 
-    // Nettoyage standard (nom, verrous)
+    // Admin override pour déverrouiller les lockedTraits
+    const isAdminOverride = incoming.adminOverride === true;
+    if (isAdminOverride) {
+      console.log('JDR DEBUG: Admin override activé pour PATCH');
+      delete incoming.adminOverride; // Ne pas persister ce flag
+    }
+
+    if (incoming.id) delete incoming.id;
+
     if ('name' in incoming) {
       incoming.name = incoming.name ? String(incoming.name).trim() : null;
       if (!incoming.name) delete incoming.name;
     }
-    const locks = new Set(current.lockedTraits || []);
-    for (const f of locks) if (f in incoming) delete incoming[f];
 
-    // Merge profond PATCH
+    // Respecter lockedTraits sauf si admin override
+    if (!isAdminOverride) {
+      const locks = new Set(current.lockedTraits || []);
+      for (const f of locks) if (f in incoming) delete incoming[f];
+    }
+
     const merged = deepMerge(current, incoming);
     await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
-    
+
     res.json(merged);
   } catch (e) {
     console.error('PATCH /api/pnjs/:id error', e);
@@ -565,40 +577,6 @@ app.patch('/api/pnjs/:id', async (req, res) => {
   }
 });
 
-app.put('/api/pnjs/:id', async (req, res) => {
-  try {
-    const id = req.params.id.trim();
-    const rows = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
-    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
-
-    const current = rows[0].data;
-    let incoming = req.body;
-
-    // Support explicite des formats GPT confus (comme PATCH)
-    if (incoming.patch && typeof incoming.patch === 'object') {
-      console.log('JDR DEBUG: Format patch détecté sur PUT, aplatissement...');
-      incoming = { ...incoming.patch };
-    }
-    if (incoming.id) delete incoming.id;
-
-    // Nettoyage standard
-    if ('name' in incoming) {
-      incoming.name = incoming.name ? String(incoming.name).trim() : null;
-      if (!incoming.name) delete incoming.name;
-    }
-    const locks = new Set(current.lockedTraits || []);
-    for (const f of locks) if (f in incoming) delete incoming[f];
-
-    // Shallow replace PUT
-    const merged = { ...current, ...incoming, id };
-    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
-    
-    res.json(merged);
-  } catch (e) {
-    console.error('PUT /api/pnjs/:id error', e);
-    res.status(500).json({ message: 'DB error' });
-  }
-});
 
 app.put('/api/pnjs/:id', async (req, res) => {
   try {
@@ -609,18 +587,31 @@ app.put('/api/pnjs/:id', async (req, res) => {
     const current = rows[0].data || {};
     let incoming = (req.body && typeof req.body === 'object') ? req.body : {};
 
+    // Support format { patch: { ... } }
     if (incoming.patch && typeof incoming.patch === 'object') {
       console.log('JDR DEBUG: Format patch détecté sur PUT, aplatissement...');
       incoming = { ...incoming.patch };
     }
+
+    // Admin override pour déverrouiller les lockedTraits
+    const isAdminOverride = incoming.adminOverride === true;
+    if (isAdminOverride) {
+      console.log('JDR DEBUG: Admin override activé pour PUT');
+      delete incoming.adminOverride; // Ne pas persister ce flag
+    }
+
     if (incoming.id) delete incoming.id;
 
     if ('name' in incoming) {
       incoming.name = incoming.name ? String(incoming.name).trim() : null;
       if (!incoming.name) delete incoming.name;
     }
-    const locks = new Set(current.lockedTraits || []);
-    for (const f of locks) if (f in incoming) delete incoming[f];
+
+    // Respecter lockedTraits sauf si admin override
+    if (!isAdminOverride) {
+      const locks = new Set(current.lockedTraits || []);
+      for (const f of locks) if (f in incoming) delete incoming[f];
+    }
 
     const merged = { ...current, ...incoming, id };
     await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
@@ -631,6 +622,7 @@ app.put('/api/pnjs/:id', async (req, res) => {
     res.status(500).json({ message: 'DB error' });
   }
 });
+
 // =================== ENGINE (contexte pour GPT) ====================
 
 // preload PNJ dans session
@@ -1069,6 +1061,12 @@ app.post('/api/engine/commit', async (req, res) => {
     }
 // updates PNJ
 if (pnjUpdates.length) {
+  // Admin override pour déverrouiller lockedTraits
+  const isAdminOverride = body.adminOverride === true;
+  if (isAdminOverride) {
+    console.log('[JDR][COMMIT] Admin override activé');
+  }
+
   for (const upd of pnjUpdates) {
     const id = String(upd.id || '').trim();
     const patch = upd.patch || {};
@@ -1078,7 +1076,7 @@ if (pnjUpdates.length) {
     if (!r.rows.length) continue;
 
     const current = r.rows[0].data;
-    const filteredPatch = stripLockedPatch(current, patch);
+    const filteredPatch = stripLockedPatch(current, patch, isAdminOverride);
 
     // si patch devient vide -> on skip
     if (!filteredPatch || (typeof filteredPatch === 'object' && !Array.isArray(filteredPatch) && Object.keys(filteredPatch).length === 0)) {
@@ -1092,9 +1090,10 @@ if (pnjUpdates.length) {
       [id, JSON.stringify(merged)]
     );
 
-    console.log('[JDR][COMMIT] pnj updated', { sid, id, keys: Object.keys(filteredPatch || {}) });
+    console.log('[JDR][COMMIT] pnj updated', { sid, id, keys: Object.keys(filteredPatch || {}), adminOverride: isAdminOverride });
   }
 }
+
 
 
     // lock de traits
@@ -1333,6 +1332,7 @@ app.get('/api/db/whoami', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
