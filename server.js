@@ -622,50 +622,7 @@ app.put('/api/pnjs/:id', async (req, res) => {
 
 
 
-app.put('/api/pnjs/:id', async (req, res) => {
-  try {
-    const id = req.params.id.trim();
-    const rows = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
-    if (!rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
 
-    const current = rows[0].data || {};
-    let incoming = (req.body && typeof req.body === 'object') ? req.body : {};
-
-    // Support format { patch: { ... } }
-    if (incoming.patch && typeof incoming.patch === 'object') {
-      console.log('JDR DEBUG: Format patch détecté sur PUT, aplatissement...');
-      incoming = { ...incoming.patch };
-    }
-
-    // Admin override pour déverrouiller les lockedTraits
-    const isAdminOverride = incoming.adminOverride === true;
-    if (isAdminOverride) {
-      console.log('JDR DEBUG: Admin override activé pour PUT');
-      delete incoming.adminOverride; // Ne pas persister ce flag
-    }
-
-    if (incoming.id) delete incoming.id;
-
-    if ('name' in incoming) {
-      incoming.name = incoming.name ? String(incoming.name).trim() : null;
-      if (!incoming.name) delete incoming.name;
-    }
-
-    // Respecter lockedTraits sauf si admin override
-    if (!isAdminOverride) {
-      const locks = new Set(current.lockedTraits || []);
-      for (const f of locks) if (f in incoming) delete incoming[f];
-    }
-
-    const merged = { ...current, ...incoming, id };
-    await pool.query('UPDATE pnjs SET data = $2::jsonb WHERE id = $1', [id, JSON.stringify(merged)]);
-
-    res.json(merged);
-  } catch (e) {
-    console.error('PUT /api/pnjs/:id error', e);
-    res.status(500).json({ message: 'DB error' });
-  }
-});
 
 // =================== ENGINE (contexte pour GPT) ====================
 
@@ -975,8 +932,11 @@ const pnjDetails = pnjs.slice(0, 50).map(p => ({
   lockedTraits: Array.isArray(p.lockedTraits) ? p.lockedTraits : [],
   skills: Array.isArray(p.skills) ? p.skills : [],
   magics: Array.isArray(p.magics) ? p.magics : [],
-  weaponTechniques: Array.isArray(p.weaponTechniques) ? p.weaponTechniques : []
+  weaponTechniques: Array.isArray(p.weaponTechniques) ? p.weaponTechniques : [],
+  transformations: Array.isArray(p.transformations) ? p.transformations : [],
+  activeTransformation: p.activeTransformation ?? null
 }));
+
 
 
 
@@ -1376,6 +1336,7 @@ app.get('/api/db/whoami', async (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
