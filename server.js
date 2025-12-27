@@ -269,7 +269,7 @@ app.get('/api/pnjs/names', async (req, res) => {
 
   const where = [
     includeDeleted ? null : sqlNotDeleted('data'),
-    includeDrafts ? null : sqlCanonOnly('data'),
+    
   ].filter(Boolean);
 
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -317,7 +317,7 @@ app.get('/api/pnjs', async (req, res) => {
     const params = [];
 
     if (!includeDeleted) wheres.push(sqlNotDeleted('data'));
-    if (!includeDrafts) wheres.push(sqlCanonOnly('data'));
+    // Removed canon-only filter for DB-first mode
 
     if (q) {
       params.push(`%${q}%`, `%${q}%`);
@@ -378,7 +378,7 @@ app.get('/api/pnjs/resolve', async (req, res) => {
 
   const extraWhere = [
     includeDeleted ? null : sqlNotDeleted('data'),
-    includeDrafts ? null : sqlCanonOnly('data'),
+    
   ].filter(Boolean).join(' AND ');
 
   const whereBase = extraWhere ? `AND ${extraWhere}` : '';
@@ -481,7 +481,7 @@ app.get('/api/pnjs/by-name', async (req, res) => {
 
   const wheres = [`lower(data->>'name') LIKE lower($1)`];
   if (!includeDeleted) wheres.push(sqlNotDeleted('data'));
-  if (!includeDrafts) wheres.push(sqlCanonOnly('data'));
+  // Removed canon-only filter for DB-first mode
 
   try {
     const { rows } = await pool.query(
@@ -922,9 +922,12 @@ app.post('/api/engine/context', async (req, res) => {
 
     // ✅ filtre canon/draft + deleted
     pnjs = pnjs.filter(p => p && p.deleted !== true);
-    if (!includeDrafts) {
-      pnjs = pnjs.filter(p => (p?.canon?.status || 'draft') === 'canon');
-    }
+
+// DB-first mode: keep all PNJ (drafts, semi, canon)
+// But mark only canon PNJ as playable
+const playable = pnjs.filter(p => (p?.canon?.status || 'draft') === 'canon');
+const nonPlayable = pnjs.filter(p => (p?.canon?.status || 'draft') !== 'canon');
+pnjs = [...playable, ...nonPlayable];
 
     // Si le client fournit pnjIds, on pin
     const providedIds = Array.isArray(body.pnjIds) ? body.pnjIds.map(String) : [];
