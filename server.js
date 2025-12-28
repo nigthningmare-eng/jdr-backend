@@ -576,41 +576,44 @@ app.get('/api/pnjs/:id', async (req, res) => {
   }
 });
 
+// ✏️ PATCH — Mise à jour PNJ intelligente
 app.patch('/api/pnjs/:id', async (req, res) => {
   try {
     const { id } = req.params;
     let { patch, adminOverride } = req.body;
 
-    // ✅ Corrige le parsing du JSON
     if (!patch && typeof req.body === "object") patch = req.body;
-    if (!patch || Object.keys(patch).length === 0) {
+    if (!patch || Object.keys(patch).length === 0)
       return res.status(400).json({ ok: false, message: "Aucune donnée à modifier." });
-    }
 
-    // 🔍 Récupération du PNJ existant
+    // 🔍 Récupère le PNJ existant
     const existing = await pool.query("SELECT data FROM pnjs WHERE id = $1", [id]);
-    if (existing.rows.length === 0) {
+    if (existing.rows.length === 0)
       return res.status(404).json({ ok: false, message: `PNJ ${id} introuvable.` });
-    }
 
     const currentData = existing.rows[0].data || {};
     const locked = currentData.lockedTraits || [];
 
-    // 🔐 Protection des champs verrouillés
+    // 🔒 Ignore les champs verrouillés sauf adminOverride
     if (!adminOverride) {
       for (const key of Object.keys(patch)) {
-        if (locked.includes(key)) {
-          console.log(`⛔ Champ verrouillé ignoré : ${key}`);
-          delete patch[key];
-        }
+        if (locked.includes(key)) delete patch[key];
       }
     }
 
-    // 🧩 Fusion propre et conversion en JSONB
-    const mergedData = { ...currentData, ...patch };
-    const payload = JSON.stringify(mergedData);
+    // 🧠 Corrige les champs mal placés (comme 'statut' ou 'race')
+    const nestedFix = { ...patch };
+    for (const key of ["statut", "race", "royaume", "compétence ultime"]) {
+      if (nestedFix[key]) {
+        if (!currentData.stats) currentData.stats = {};
+        currentData.stats[key] = nestedFix[key];
+        delete nestedFix[key];
+      }
+    }
 
-    // 🧠 Mise à jour en base
+    const mergedData = { ...currentData, ...nestedFix };
+
+    const payload = JSON.stringify(mergedData);
     const updateQuery = `
       UPDATE pnjs
       SET data = $1::jsonb
@@ -619,32 +622,18 @@ app.patch('/api/pnjs/:id', async (req, res) => {
     `;
     const result = await pool.query(updateQuery, [payload, id]);
 
-    if (result.rowCount === 0) {
-      return res.status(500).json({ ok: false, message: "Échec de mise à jour en base." });
-    }
-
-    // 🔁 Rafraîchit le moteur narratif (facultatif)
-    try {
-      await fetch("https://jdr-backend.onrender.com/api/engine/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sid: "default" }),
-      });
-    } catch (e) {
-      console.warn("⚠️ Rafraîchissement du moteur échoué :", e.message);
-    }
-
     res.json({
       ok: true,
       id,
-      message: "✅ PNJ mis à jour dans la base PostgreSQL.",
+      message: "✅ PNJ mis à jour avec succès (intelligent merge).",
       data: result.rows[0].data,
     });
   } catch (err) {
-    console.error("[PATCH PNJ ERROR]", err);
+    console.error("[PATCH PNJ INTELLIGENT]", err);
     res.status(500).json({ ok: false, message: err.message });
   }
 });
+
 
 
 
@@ -1590,6 +1579,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
