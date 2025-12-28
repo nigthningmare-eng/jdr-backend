@@ -503,8 +503,11 @@ app.get('/api/pnjs/by-name', async (req, res) => {
   }
 });
 
-// ✅ GET par id (APRÈS les routes statiques)
-// ✅ LISTE TOUS LES PNJ
+// ================================================
+// 🔮 ROUTES PNJ — CRUD COMPLET POUR BASE POSTGRESQL
+// ================================================
+
+// ✅ Liste tous les PNJ
 app.get('/api/pnjs/list', async (req, res) => {
   try {
     const result = await pool.query('SELECT id, data FROM pnjs');
@@ -514,80 +517,112 @@ app.get('/api/pnjs/list', async (req, res) => {
       race: r.data.race || r.data.stats?.race,
       statut: r.data.statut || r.data.stats?.statut,
     }));
-    res.json({
-      ok: true,
-      total: formatted.length,
-      results: formatted
-    });
+    res.json({ ok: true, total: formatted.length, results: formatted });
   } catch (err) {
     console.error('[GET PNJS LIST]', err);
     res.status(500).json({ ok: false, message: 'Erreur serveur lors de la liste PNJ' });
   }
 });
 
-// 🔍 RECHERCHE PNJ INTELLIGENTE (nom, race, compétence, statut, etc.)
+// 🔍 Recherche PNJ avancée (nom, race, compétence, statut, etc.)
 app.get('/api/pnjs/search', async (req, res) => {
   try {
     const { q } = req.query;
-
-    if (!q || q.trim().length < 2) {
+    if (!q || q.trim().length < 2)
       return res.status(400).json({ ok: false, message: "Paramètre 'q' manquant ou trop court" });
-    }
 
     const search = q.trim().toLowerCase();
-
-    const query = `
+    const results = await pool.query(
+      `
       SELECT id, data
       FROM pnjs
-      WHERE
-        LOWER(data->>'name') LIKE $1
-        OR LOWER(data->>'race') LIKE $1
-        OR LOWER(data->>'statut') LIKE $1
-        OR LOWER(data->>'description') LIKE $1
-        OR LOWER(data->>'backstory') LIKE $1
-        OR EXISTS (
-          SELECT 1 FROM jsonb_array_elements_text(data->'skills') s WHERE LOWER(s) LIKE $1
-        )
-        OR EXISTS (
-          SELECT 1 FROM jsonb_array_elements_text(data->'ultimateSkills') u WHERE LOWER(u) LIKE $1
-        )
-        OR EXISTS (
-          SELECT 1 FROM jsonb_array_elements_text(data->'personalityTraits') p WHERE LOWER(p) LIKE $1
-        )
-    `;
+      WHERE LOWER(data::text) LIKE $1
+      `,
+      [`%${search}%`]
+    );
 
-    const results = await pool.query(query, [`%${search}%`]);
-
-    if (results.rows.length === 0) {
-      return res.status(404).json({
-        ok: false,
-        message: `Aucun PNJ trouvé correspondant à '${q}'`,
-      });
-    }
-
-    const formatted = results.rows.map(r => ({
-      id: r.id,
-      name: r.data.name,
-      race: r.data.race || r.data.stats?.race,
-      statut: r.data.statut || r.data.stats?.statut,
-      description: r.data.description || "",
-    }));
+    if (results.rows.length === 0)
+      return res.status(404).json({ ok: false, message: `Aucun PNJ trouvé pour '${q}'` });
 
     res.json({
       ok: true,
-      total: formatted.length,
+      total: results.rows.length,
       query: q,
-      results: formatted,
+      results: results.rows.map(r => ({
+        id: r.id,
+        name: r.data.name,
+        race: r.data.race || r.data.stats?.race,
+        statut: r.data.statut || r.data.stats?.statut,
+      })),
     });
   } catch (err) {
-    console.error("[SEARCH PNJ ERROR]", err);
-    res.status(500).json({
-      ok: false,
-      message: "Erreur lors de la recherche PNJ",
-      error: err.message,
-    });
+    console.error('[SEARCH PNJ ERROR]', err);
+    res.status(500).json({ ok: false, message: 'Erreur serveur lors de la recherche PNJ' });
   }
 });
+
+// 🔎 Récupère un PNJ par ID
+app.get('/api/pnjs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (result.rows.length === 0)
+      return res.status(404).json({ ok: false, message: `PNJ ${id} introuvable` });
+
+    res.json({ ok: true, id, data: result.rows[0].data });
+  } catch (err) {
+    console.error('[GET PNJ BY ID]', err);
+    res.status(500).json({ ok: false, message: 'Erreur serveur lors de la récupération du PNJ', error: err.message });
+  }
+});
+
+// ✏️ Met à jour un PNJ (patch libre, admin ou non)
+app.patch('/api/pnjs/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    let { patch, adminOverride } = req.body;
+    if (!patch && typeof req.body === 'object') patch = req.body;
+
+    if (!patch) return res.status(400).json({ ok: false, message: 'patch non reconnu ou vide' });
+
+    const result = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
+    if (result.rows.length === 0)
+      return res.status(404).json({ ok: false, message: `PNJ ${id} introuvable` });
+
+    const currentData = result.rows[0].data || {};
+    const locked = currentData.lockedTraits || [];
+    if (!adminOverride) {
+      for (const key of Object.keys(patch)) {
+        if (locked.includes(key)) delete patch[key];
+      }
+    }
+
+    const mergedData = { ...currentData, ...patch };
+
+    const updated = await pool.query(
+      `UPDATE pnjs SET data = jsonb_strip_nulls($1::jsonb) WHERE id = $2 RETURNING id, data`,
+      [JSON.stringify(mergedData), id]
+    );
+
+    // 🔁 Rafraîchit le moteur narratif (facultatif)
+    try {
+      await fetch('https://jdr-backend.onrender.com/api/engine/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sid: 'default' })
+      });
+      console.log(`[ENGINE REFRESH] Synchronisation réussie`);
+    } catch (e) {
+      console.warn('⚠️ Impossible de rafraîchir le moteur:', e.message);
+    }
+
+    res.json({ ok: true, id, message: '✅ PNJ mis à jour', data: updated.rows[0].data });
+  } catch (err) {
+    console.error('[PATCH PNJ ERROR]', err);
+    res.status(500).json({ ok: false, message: 'Erreur serveur lors de la mise à jour PNJ', error: err.message });
+  }
+});
+
 
 // ✅ CREATE (INSERT only)
 app.post('/api/pnjs', async (req, res) => {
@@ -1531,6 +1566,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
