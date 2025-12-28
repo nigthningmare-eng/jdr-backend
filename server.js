@@ -691,86 +691,7 @@ app.post('/api/pnjs', async (req, res) => {
   }
 });
 
-// ✅ PATCH PNJ — Version corrigée (avec pool + refresh engine)
-app.patch('/api/pnjs/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    let { patch, adminOverride } = req.body;
 
-    // Tolérance : si la clé "patch" est absente
-    if (!patch && typeof req.body === 'object') {
-      patch = req.body;
-    }
-
-    if (!patch) {
-      return res.status(400).json({ ok: false, message: 'patch non reconnu ou vide' });
-    }
-
-    // 🔍 Récupérer le PNJ existant
-    const result = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
-    if (result.rows.length === 0) {
-      return res.status(404).json({ ok: false, message: `PNJ ${id} introuvable` });
-    }
-
-    const currentData = result.rows[0].data || {};
-
-    // 🔐 Locked traits
-    const locked = currentData.lockedTraits || [];
-    if (!adminOverride) {
-      for (const key of Object.keys(patch)) {
-        if (locked.includes(key)) {
-          delete patch[key];
-        }
-      }
-    }
-
-    // 🧬 Merge profond
-    const mergedData = { ...currentData, ...patch };
-
-    // 🧠 Mise à jour SQL avec commit forcé
-    const updated = await pool.query(
-      `
-      UPDATE pnjs
-      SET data = jsonb_strip_nulls($1::jsonb)
-      WHERE id = $2::text
-      RETURNING id, data
-      `,
-      [JSON.stringify(mergedData), id]
-    );
-
-    if (updated.rows.length === 0) {
-      return res.status(404).json({ ok: false, message: `PNJ ${id} introuvable ou non modifié` });
-    }
-
-    console.log(`[PNJ PATCH] ${id} mis à jour (${Object.keys(patch).join(', ')})`);
-
-    // 🔁 Rafraîchit le moteur narratif automatiquement
-    try {
-      await fetch('https://jdr-backend.onrender.com/api/engine/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sid: 'default' })
-      });
-      console.log(`[ENGINE REFRESH] Synchronisation réussie`);
-    } catch (e) {
-      console.warn('⚠️ Impossible de rafraîchir le moteur:', e.message);
-    }
-
-    res.json({
-      ok: true,
-      id,
-      message: '✅ Fiche PNJ mise à jour avec succès',
-      data: updated.rows[0].data,
-    });
-  } catch (err) {
-    console.error('[PATCH PNJ ERROR]', err);
-    res.status(500).json({
-      ok: false,
-      message: 'Erreur serveur lors de la mise à jour PNJ',
-      error: err.message,
-    });
-  }
-});
 
 
 
@@ -1590,6 +1511,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
