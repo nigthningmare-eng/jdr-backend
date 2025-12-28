@@ -1183,7 +1183,10 @@ app.post('/api/engine/commit', async (req, res) => {
     const modelReply = String(body.modelReply || '').trim();
     const notes = String(body.notes || '').trim();
     const pnjUpdates = Array.isArray(body.pnjUpdates) ? body.pnjUpdates : [];
-    
+    console.log('🔥 ENGINE/COMMIT BODY COMPLET:', JSON.stringify(req.body, null, 2));  ← ICI
+    console.log('🔥 PNJ UPDATES:', pnjUpdates.map(u => ({id: u?.id, keys: Object.keys(u?.patch || {})})));  ← ICI
+    console.log('🔥 NOMBRE UPDATES:', pnjUpdates?.length || 0);  ← ICI
+
     const sess = await getOrInitSession(sid);
     sess.data = sess.data || {};
     
@@ -1492,6 +1495,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
