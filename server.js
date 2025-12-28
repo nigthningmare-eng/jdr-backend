@@ -504,20 +504,88 @@ app.get('/api/pnjs/by-name', async (req, res) => {
 });
 
 // ✅ GET par id (APRÈS les routes statiques)
-app.get('/api/pnjs/:id', async (req, res) => {
+// ✅ LISTE TOUS LES PNJ
+app.get('/api/pnjs/list', async (req, res) => {
   try {
-    const id = String(req.params.id || '').trim();
-    if (id === 'resolve' || id === 'by-name' || id === 'search') {
-      return res.status(404).json({ message: 'Route PNJ invalide.' });
+    const result = await pool.query('SELECT id, data FROM pnjs');
+    const formatted = result.rows.map(r => ({
+      id: r.id,
+      name: r.data.name,
+      race: r.data.race || r.data.stats?.race,
+      statut: r.data.statut || r.data.stats?.statut,
+    }));
+    res.json({
+      ok: true,
+      total: formatted.length,
+      results: formatted
+    });
+  } catch (err) {
+    console.error('[GET PNJS LIST]', err);
+    res.status(500).json({ ok: false, message: 'Erreur serveur lors de la liste PNJ' });
+  }
+});
+
+// 🔍 RECHERCHE PNJ INTELLIGENTE (nom, race, compétence, statut, etc.)
+app.get('/api/pnjs/search', async (req, res) => {
+  try {
+    const { q } = req.query;
+
+    if (!q || q.trim().length < 2) {
+      return res.status(400).json({ ok: false, message: "Paramètre 'q' manquant ou trop court" });
     }
 
-    const r = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
-    if (!r.rows.length) return res.status(404).json({ message: 'PNJ non trouvé.' });
+    const search = q.trim().toLowerCase();
 
-    res.json(r.rows[0].data);
-  } catch (e) {
-    console.error('GET /api/pnjs/:id error:', e);
-    res.status(500).json({ message: 'DB error' });
+    const query = `
+      SELECT id, data
+      FROM pnjs
+      WHERE
+        LOWER(data->>'name') LIKE $1
+        OR LOWER(data->>'race') LIKE $1
+        OR LOWER(data->>'statut') LIKE $1
+        OR LOWER(data->>'description') LIKE $1
+        OR LOWER(data->>'backstory') LIKE $1
+        OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text(data->'skills') s WHERE LOWER(s) LIKE $1
+        )
+        OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text(data->'ultimateSkills') u WHERE LOWER(u) LIKE $1
+        )
+        OR EXISTS (
+          SELECT 1 FROM jsonb_array_elements_text(data->'personalityTraits') p WHERE LOWER(p) LIKE $1
+        )
+    `;
+
+    const results = await pool.query(query, [`%${search}%`]);
+
+    if (results.rows.length === 0) {
+      return res.status(404).json({
+        ok: false,
+        message: `Aucun PNJ trouvé correspondant à '${q}'`,
+      });
+    }
+
+    const formatted = results.rows.map(r => ({
+      id: r.id,
+      name: r.data.name,
+      race: r.data.race || r.data.stats?.race,
+      statut: r.data.statut || r.data.stats?.statut,
+      description: r.data.description || "",
+    }));
+
+    res.json({
+      ok: true,
+      total: formatted.length,
+      query: q,
+      results: formatted,
+    });
+  } catch (err) {
+    console.error("[SEARCH PNJ ERROR]", err);
+    res.status(500).json({
+      ok: false,
+      message: "Erreur lors de la recherche PNJ",
+      error: err.message,
+    });
   }
 });
 
@@ -564,7 +632,7 @@ app.post('/api/pnjs', async (req, res) => {
   }
 });
 
-// ✅ PATCH PNJ — Version finale avec mise à jour PostgreSQL
+// ✅ PATCH PNJ — Version corrigée (avec pool + refresh engine)
 app.patch('/api/pnjs/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -580,39 +648,60 @@ app.patch('/api/pnjs/:id', async (req, res) => {
     }
 
     // 🔍 Récupérer le PNJ existant
-    const result = await db.query('SELECT * FROM pnjs WHERE id = $1', [id]);
+    const result = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
     if (result.rows.length === 0) {
       return res.status(404).json({ ok: false, message: `PNJ ${id} introuvable` });
     }
 
     const currentData = result.rows[0].data || {};
 
-    // 🔐 Si lockedTraits existent, filtrer les clés interdites (sauf adminOverride)
+    // 🔐 Locked traits
     const locked = currentData.lockedTraits || [];
     if (!adminOverride) {
       for (const key of Object.keys(patch)) {
         if (locked.includes(key)) {
-          delete patch[key]; // ignorer les champs verrouillés
+          delete patch[key];
         }
       }
     }
 
-    // 🧬 Fusionner les données existantes et les nouvelles (merge profond)
+    // 🧬 Merge profond
     const mergedData = { ...currentData, ...patch };
 
-    // 🧠 Mise à jour dans PostgreSQL
-    await db.query(
-      `UPDATE pnjs SET data = $1 WHERE id = $2`,
+    // 🧠 Mise à jour SQL avec commit forcé
+    const updated = await pool.query(
+      `
+      UPDATE pnjs
+      SET data = jsonb_strip_nulls($1::jsonb)
+      WHERE id = $2::text
+      RETURNING id, data
+      `,
       [JSON.stringify(mergedData), id]
     );
 
+    if (updated.rows.length === 0) {
+      return res.status(404).json({ ok: false, message: `PNJ ${id} introuvable ou non modifié` });
+    }
+
     console.log(`[PNJ PATCH] ${id} mis à jour (${Object.keys(patch).join(', ')})`);
+
+    // 🔁 Rafraîchit le moteur narratif automatiquement
+    try {
+      await fetch('https://jdr-backend.onrender.com/api/engine/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sid: 'default' })
+      });
+      console.log(`[ENGINE REFRESH] Synchronisation réussie`);
+    } catch (e) {
+      console.warn('⚠️ Impossible de rafraîchir le moteur:', e.message);
+    }
 
     res.json({
       ok: true,
       id,
       message: '✅ Fiche PNJ mise à jour avec succès',
-      patch,
+      data: updated.rows[0].data,
     });
   } catch (err) {
     console.error('[PATCH PNJ ERROR]', err);
@@ -623,6 +712,7 @@ app.patch('/api/pnjs/:id', async (req, res) => {
     });
   }
 });
+
 
 
 // ✅ PUT (update only, mais propre; tu peux le transformer en upsert si tu veux)
@@ -1441,6 +1531,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
