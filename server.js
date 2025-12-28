@@ -1179,16 +1179,16 @@ TU ES LE MJ. TU DOIS JOUER LA SCÈNE, PAS LA RÉSUMER.
 app.post('/api/engine/commit', async (req, res) => {
   try {
     const body = req.body;
-    const sid = String(body.sid || 'default');
-    const modelReply = String(body.modelReply || '').trim();
-    const notes = String(body.notes || '').trim();
+    // ... autres const ...
     const pnjUpdates = Array.isArray(body.pnjUpdates) ? body.pnjUpdates : [];
-    console.log('🔥 ENGINE/COMMIT BODY COMPLET:', JSON.stringify(req.body, null, 2));  ← ICI
-    console.log('🔥 PNJ UPDATES:', pnjUpdates.map(u => ({id: u?.id, keys: Object.keys(u?.patch || {})})));  ← ICI
-    console.log('🔥 NOMBRE UPDATES:', pnjUpdates?.length || 0);  ← ICI
-
+    
+    console.log('🔥 ENGINE/COMMIT BODY COMPLET:', JSON.stringify(req.body, null, 2));
+    console.log('🔥 PNJ UPDATES:', pnjUpdates.map(u => ({id: u?.id, keys: Object.keys(u?.patch || {})})));
+    console.log('🔥 NOMBRE UPDATES:', pnjUpdates?.length || 0);
+    
     const sess = await getOrInitSession(sid);
-    sess.data = sess.data || {};
+
+
     
     // Anti-loop
     sess.data.lastReplies = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies : [];
@@ -1495,6 +1495,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
