@@ -1257,26 +1257,71 @@ app.get('/', (req, res) => {
 
 // =================== MEMORY PERSISTANTE ====================
 
-// SAVE MEMORY
+// ✅ POST /api/memory/save — Correction compatibilité GPT / canon
 app.post('/api/memory/save', async (req, res) => {
-  const { sid = "main", key, value } = req.body || {};
-  if (!key || typeof value !== 'string') {
-    return res.status(400).json({ ok: false, message: "key/value manquant" });
-  }
-
   try {
-    await pool.query(
-      `INSERT INTO memories (sid, key, value)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (sid, key) DO UPDATE SET value = $3, updated_at = NOW()`,
-      [sid, key, value]
+    // Récupération souple des données reçues
+    const { sid, key, value, ...rest } = req.body;
+
+    // 🧠 Tolérance aux formats personnalisés (GPT envoie parfois canonUpdate/pnjId)
+    const realKey =
+      key ||
+      rest.key ||
+      rest.pnjId ||
+      'auto_canon_update_' + Date.now();
+
+    const realValue =
+      value ||
+      rest.value ||
+      rest.canonUpdate ||
+      rest.canon ||
+      rest.data ||
+      JSON.stringify(rest, null, 2);
+
+    if (!realValue) {
+      return res.status(400).json({
+        ok: false,
+        message: '❌ Aucune donnée à sauvegarder (key/value manquant)',
+        received: req.body,
+      });
+    }
+
+    const finalSid = sid || 'main';
+
+    // 🔐 Sauvegarde ou mise à jour dans PostgreSQL
+    await db.query(
+      `
+      INSERT INTO memories (sid, key, value, updated_at)
+      VALUES ($1, $2, $3, NOW())
+      ON CONFLICT (key)
+      DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+      `,
+      [finalSid, realKey, typeof realValue === 'string' ? realValue : JSON.stringify(realValue)]
     );
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('POST /api/memory/save error:', e);
-    res.status(500).json({ ok: false, message: "DB error" });
+
+    console.log(
+      `[MEMORY SAVE] ${realKey} -> OK (${typeof realValue})`
+    );
+
+    return res.json({
+      ok: true,
+      sid: finalSid,
+      key: realKey,
+      message: '✅ Mémoire canonique sauvegardée avec succès',
+    });
+  } catch (err) {
+    console.error('[MEMORY SAVE ERROR]', err);
+    return res.status(500).json({
+      ok: false,
+      message: 'Erreur interne lors de la sauvegarde mémoire',
+      error: err.message,
+    });
   }
 });
+
+
+
+
 
 // GET MEMORY
 app.get('/api/memory/get', async (req, res) => {
@@ -1366,4 +1411,5 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
