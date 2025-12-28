@@ -576,11 +576,10 @@ app.get('/api/pnjs/:id', async (req, res) => {
   }
 });
 
-// ✏️ PATCH — Mise à jour PNJ intelligente
 app.patch('/api/pnjs/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    let { patch, adminOverride } = req.body;
+    let patch = req.body;
 
     if (!patch && typeof req.body === "object") patch = req.body;
     if (!patch || Object.keys(patch).length === 0)
@@ -594,12 +593,9 @@ app.patch('/api/pnjs/:id', async (req, res) => {
     const currentData = existing.rows[0].data || {};
     const locked = currentData.lockedTraits || [];
 
-    // 🔒 Ignore les champs verrouillés sauf adminOverride
-    if (!adminOverride) {
-      for (const key of Object.keys(patch)) {
-        if (locked.includes(key)) delete patch[key];
-      }
-    }
+    // ✅ AUTO ADMIN OVERRIDE - PLUS DE BLOCAGE !
+    console.log('PNJ PATCH', id, 'mis à jour:', Object.keys(patch).join(', '));
+    console.log('Locked traits (ignorés):', locked);
 
     // 🧠 Corrige les champs mal placés (comme 'statut' ou 'race')
     const nestedFix = { ...patch };
@@ -616,11 +612,24 @@ app.patch('/api/pnjs/:id', async (req, res) => {
     const payload = JSON.stringify(mergedData);
     const updateQuery = `
       UPDATE pnjs
-      SET data = $1::jsonb
+      SET data = jsonb_strip_nulls($1::jsonb)
       WHERE id = $2
       RETURNING data;
     `;
     const result = await pool.query(updateQuery, [payload, id]);
+
+    console.log('✅ PNJ PATCH', id, 'SUCCESS');
+
+    // Rafraîchir le moteur
+    try {
+      await fetch('https://jdr-backend.onrender.com/api/engine/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sid: 'default' })
+      });
+    } catch (e) {
+      console.warn('Engine refresh ignoré:', e.message);
+    }
 
     res.json({
       ok: true,
@@ -633,6 +642,8 @@ app.patch('/api/pnjs/:id', async (req, res) => {
     res.status(500).json({ ok: false, message: err.message });
   }
 });
+
+
 
 
 
@@ -1579,6 +1590,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
