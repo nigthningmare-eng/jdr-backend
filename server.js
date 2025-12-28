@@ -576,52 +576,76 @@ app.get('/api/pnjs/:id', async (req, res) => {
   }
 });
 
-// ✏️ Met à jour un PNJ (patch libre, admin ou non)
 app.patch('/api/pnjs/:id', async (req, res) => {
   try {
     const { id } = req.params;
     let { patch, adminOverride } = req.body;
-    if (!patch && typeof req.body === 'object') patch = req.body;
 
-    if (!patch) return res.status(400).json({ ok: false, message: 'patch non reconnu ou vide' });
+    // ✅ Corrige le parsing du JSON
+    if (!patch && typeof req.body === "object") patch = req.body;
+    if (!patch || Object.keys(patch).length === 0) {
+      return res.status(400).json({ ok: false, message: "Aucune donnée à modifier." });
+    }
 
-    const result = await pool.query('SELECT data FROM pnjs WHERE id = $1', [id]);
-    if (result.rows.length === 0)
-      return res.status(404).json({ ok: false, message: `PNJ ${id} introuvable` });
+    // 🔍 Récupération du PNJ existant
+    const existing = await pool.query("SELECT data FROM pnjs WHERE id = $1", [id]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ ok: false, message: `PNJ ${id} introuvable.` });
+    }
 
-    const currentData = result.rows[0].data || {};
+    const currentData = existing.rows[0].data || {};
     const locked = currentData.lockedTraits || [];
+
+    // 🔐 Protection des champs verrouillés
     if (!adminOverride) {
       for (const key of Object.keys(patch)) {
-        if (locked.includes(key)) delete patch[key];
+        if (locked.includes(key)) {
+          console.log(`⛔ Champ verrouillé ignoré : ${key}`);
+          delete patch[key];
+        }
       }
     }
 
+    // 🧩 Fusion propre et conversion en JSONB
     const mergedData = { ...currentData, ...patch };
+    const payload = JSON.stringify(mergedData);
 
-    const updated = await pool.query(
-      `UPDATE pnjs SET data = jsonb_strip_nulls($1::jsonb) WHERE id = $2 RETURNING id, data`,
-      [JSON.stringify(mergedData), id]
-    );
+    // 🧠 Mise à jour en base
+    const updateQuery = `
+      UPDATE pnjs
+      SET data = $1::jsonb
+      WHERE id = $2
+      RETURNING data;
+    `;
+    const result = await pool.query(updateQuery, [payload, id]);
+
+    if (result.rowCount === 0) {
+      return res.status(500).json({ ok: false, message: "Échec de mise à jour en base." });
+    }
 
     // 🔁 Rafraîchit le moteur narratif (facultatif)
     try {
-      await fetch('https://jdr-backend.onrender.com/api/engine/refresh', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sid: 'default' })
+      await fetch("https://jdr-backend.onrender.com/api/engine/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sid: "default" }),
       });
-      console.log(`[ENGINE REFRESH] Synchronisation réussie`);
     } catch (e) {
-      console.warn('⚠️ Impossible de rafraîchir le moteur:', e.message);
+      console.warn("⚠️ Rafraîchissement du moteur échoué :", e.message);
     }
 
-    res.json({ ok: true, id, message: '✅ PNJ mis à jour', data: updated.rows[0].data });
+    res.json({
+      ok: true,
+      id,
+      message: "✅ PNJ mis à jour dans la base PostgreSQL.",
+      data: result.rows[0].data,
+    });
   } catch (err) {
-    console.error('[PATCH PNJ ERROR]', err);
-    res.status(500).json({ ok: false, message: 'Erreur serveur lors de la mise à jour PNJ', error: err.message });
+    console.error("[PATCH PNJ ERROR]", err);
+    res.status(500).json({ ok: false, message: err.message });
   }
 });
+
 
 
 // ✅ CREATE (INSERT only)
@@ -1566,6 +1590,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
