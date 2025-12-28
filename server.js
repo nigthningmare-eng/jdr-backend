@@ -1179,7 +1179,9 @@ TU ES LE MJ. TU DOIS JOUER LA SCÈNE, PAS LA RÉSUMER.
 app.post('/api/engine/commit', async (req, res) => {
   try {
     const body = req.body;
-    // ... autres const ...
+    const sid = String(body.sid || 'default');
+    const modelReply = String(body.modelReply || '').trim();
+    const notes = String(body.notes || '').trim();
     const pnjUpdates = Array.isArray(body.pnjUpdates) ? body.pnjUpdates : [];
     
     console.log('🔥 ENGINE/COMMIT BODY COMPLET:', JSON.stringify(req.body, null, 2));
@@ -1187,8 +1189,6 @@ app.post('/api/engine/commit', async (req, res) => {
     console.log('🔥 NOMBRE UPDATES:', pnjUpdates?.length || 0);
     
     const sess = await getOrInitSession(sid);
-
-
     
     // Anti-loop
     sess.data.lastReplies = Array.isArray(sess.data.lastReplies) ? sess.data.lastReplies : [];
@@ -1205,7 +1205,7 @@ app.post('/api/engine/commit', async (req, res) => {
       if (sess.data.notes.length > 50) sess.data.notes = sess.data.notes.slice(-50);
     }
     
-    // ✅ UPDATES PNJ SANS BLOCAGE lockedTraits !
+    // UPDATES PNJ SANS BLOCAGE
     if (pnjUpdates.length) {
       console.log('ENGINE COMMIT PNJ UPDATES:', pnjUpdates.length);
       for (const upd of pnjUpdates) {
@@ -1219,7 +1219,6 @@ app.post('/api/engine/commit', async (req, res) => {
         const current = r.rows[0].data;
         console.log('COMMIT UPDATE PNJ', id, Object.keys(patch));
         
-        // ✅ MERGE DIRECT SANS stripLockedPatch !
         const merged = deepMerge(current, patch);
         await pool.query(
           'UPDATE pnjs SET data=$2::jsonb WHERE id=$1',
@@ -1235,6 +1234,7 @@ app.post('/api/engine/commit', async (req, res) => {
     res.status(500).json({ ok: false, message: 'commit failed' });
   }
 });
+
 
 
 // =================== STYLE & CONTENT SETTINGS ===================
@@ -1495,6 +1495,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
