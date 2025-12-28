@@ -564,36 +564,66 @@ app.post('/api/pnjs', async (req, res) => {
   }
 });
 
-// ✅ PATCH PNJ (corrigé - tolère les requêtes sans clé "patch")
+// ✅ PATCH PNJ — Version finale avec mise à jour PostgreSQL
 app.patch('/api/pnjs/:id', async (req, res) => {
   try {
     const { id } = req.params;
     let { patch, adminOverride } = req.body;
 
-    // 🔧 Correction : si la clé "patch" est absente, on prend le corps entier comme patch
+    // Tolérance : si la clé "patch" est absente
     if (!patch && typeof req.body === 'object') {
       patch = req.body;
     }
 
-    // 🛑 Si malgré tout rien n'est fourni, on bloque proprement
     if (!patch) {
-      return res.status(400).json({
-        ok: false,
-        message: 'Aucun patch valide reçu (clé "patch" manquante ou vide)',
-      });
+      return res.status(400).json({ ok: false, message: 'patch non reconnu ou vide' });
     }
 
-    // ✅ Continue ton code habituel ici : mise à jour du PNJ dans PostgreSQL
-    // Exemple :
-    // const updated = await db.query('UPDATE pnjs SET data = jsonb_deep_merge(data, $1) WHERE id = $2 RETURNING *', [patch, id]);
+    // 🔍 Récupérer le PNJ existant
+    const result = await db.query('SELECT * FROM pnjs WHERE id = $1', [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ ok: false, message: `PNJ ${id} introuvable` });
+    }
 
-    res.json({ ok: true, id, message: 'Mise à jour PNJ réussie', patch });
+    const currentData = result.rows[0].data || {};
+
+    // 🔐 Si lockedTraits existent, filtrer les clés interdites (sauf adminOverride)
+    const locked = currentData.lockedTraits || [];
+    if (!adminOverride) {
+      for (const key of Object.keys(patch)) {
+        if (locked.includes(key)) {
+          delete patch[key]; // ignorer les champs verrouillés
+        }
+      }
+    }
+
+    // 🧬 Fusionner les données existantes et les nouvelles (merge profond)
+    const mergedData = { ...currentData, ...patch };
+
+    // 🧠 Mise à jour dans PostgreSQL
+    await db.query(
+      `UPDATE pnjs SET data = $1 WHERE id = $2`,
+      [JSON.stringify(mergedData), id]
+    );
+
+    console.log(`[PNJ PATCH] ${id} mis à jour (${Object.keys(patch).join(', ')})`);
+
+    res.json({
+      ok: true,
+      id,
+      message: '✅ Fiche PNJ mise à jour avec succès',
+      patch,
+    });
   } catch (err) {
-    console.error('[PATCH PNJ]', err);
-    res.status(500).json({ ok: false, message: 'Erreur serveur lors du patch PNJ', error: err.message });
+    console.error('[PATCH PNJ ERROR]', err);
+    res.status(500).json({
+      ok: false,
+      message: 'Erreur serveur lors de la mise à jour PNJ',
+      error: err.message,
+    });
   }
 });
-;
+
 
 // ✅ PUT (update only, mais propre; tu peux le transformer en upsert si tu veux)
 app.put('/api/pnjs/:id', async (req, res) => {
@@ -1411,5 +1441,6 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
