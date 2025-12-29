@@ -1251,27 +1251,42 @@ app.post('/api/engine/commit', async (req, res) => {
       if (sess.data.notes.length > 50) sess.data.notes = sess.data.notes.slice(-50);
     }
     
-    // UPDATES PNJ SANS BLOCAGE
-    if (pnjUpdates.length) {
-      console.log('ENGINE COMMIT PNJ UPDATES:', pnjUpdates.length);
-      for (const upd of pnjUpdates) {
-        const id = String(upd.id).trim();
-        const patch = upd.patch;
-        if (!id || !patch) continue;
-        
-        const r = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
-        if (!r.rows.length) continue;
-        
-        const current = r.rows[0].data;
-        console.log('COMMIT UPDATE PNJ', id, Object.keys(patch));
-        
-        const merged = deepMerge(current, patch);
-        await pool.query(
-          'UPDATE pnjs SET data=$2::jsonb WHERE id=$1',
-          [id, JSON.stringify(merged)]
-        );
-      }
-    }
+// UPDATES PNJ SANS BLOCAGE
+if (pnjUpdates.length) {
+  console.log('ENGINE COMMIT PNJ UPDATES:', pnjUpdates.length);
+
+  for (const upd of pnjUpdates) {
+    const id = String(upd.id || '').trim();
+    const patch = upd.patch;
+
+    if (!id || !patch || typeof patch !== 'object') continue;
+
+    const r = await pool.query('SELECT data FROM pnjs WHERE id=$1', [id]);
+    if (!r.rows.length) continue;
+
+    const current = r.rows[0].data || {};
+    console.log('COMMIT UPDATE PNJ', id, Object.keys(patch));
+
+    const stripped = stripLockedPatch(current, patch, false);
+    const cleanedPatch = (stripped && stripped.patch) ? stripped.patch : (patch || {});
+
+    // Interdire suppressions + identité via engine/commit
+    delete cleanedPatch.deleted;
+    delete cleanedPatch.deletedAt;
+    delete cleanedPatch.id;
+    delete cleanedPatch.name;
+    delete cleanedPatch.race;
+    delete cleanedPatch.canon; // optionnel : empêche de changer canon.status via commit
+
+    const merged = deepMerge(current, cleanedPatch);
+
+    await pool.query(
+      'UPDATE pnjs SET data=$2::jsonb WHERE id=$1',
+      [id, JSON.stringify(merged)]
+    );
+  }
+}
+
     
     await saveSession(sid, sess.data);
     res.json({ ok: true });
@@ -1543,4 +1558,5 @@ app.listen(port, () => {
 });
 
  
+
 
