@@ -1,3 +1,44 @@
+Skip to content
+Navigation Menu
+nigthningmare-eng
+jdr-backend
+
+Type / to search
+Code
+Issues
+Pull requests
+Actions
+Projects
+Wiki
+Security
+Insights
+Settings
+Files
+Go to file
+t
+jdr-backend
+package-lock.json
+package.json
+pnjs.json
+races.json
+server.js
+storyState.json
+jdr-backend
+/server.js
+nigthningmare-eng
+nigthningmare-eng
+Update server.js
+a5c6628
+ · 
+now
+jdr-backend
+/server.js
+
+Code
+
+Blame
+1546 lines (1280 loc) · 50.2 KB
+function compactCard(p) {
 // ==== JDR Backend (PNJ Postgres + Moteur contexte + Canon + Mémoire + Proxy ST) ====
 const express = require('express');
 const cors = require('cors');
@@ -59,10 +100,16 @@ function deepMerge(base, update) {
 }
 
 function stripLockedPatch(current, patch, isAdminOverride = false) {
-  if (!patch || typeof patch !== 'object') return {};
+  if (!patch || typeof patch !== 'object') {
+    return { patch: {}, locked: [] };
+  }
 
   const cleaned = { ...patch };
-  if (isAdminOverride) return cleaned;
+  const lockedOut = [];
+
+  if (isAdminOverride) {
+    return { patch: cleaned, locked: lockedOut };
+  }
 
   const locked = new Set(
     Array.isArray(current?.lockedTraits)
@@ -71,9 +118,13 @@ function stripLockedPatch(current, patch, isAdminOverride = false) {
   );
 
   for (const key of Object.keys(cleaned)) {
-    if (locked.has(key)) delete cleaned[key];
+    if (locked.has(key)) {
+      lockedOut.push(key);
+      delete cleaned[key];
+    }
   }
-  return cleaned;
+
+  return { patch: cleaned, locked: lockedOut };
 }
 
 function fingerprint(text = '') {
@@ -1281,7 +1332,7 @@ app.post('/api/style', async (req, res) => {
     await pool.query(
       `INSERT INTO settings (key, value)
        VALUES ('narrativeStyle', $1::jsonb)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+       ON CONFLICT (sid, key) DO UPDATE SET value = EXCLUDED.value`,
       [JSON.stringify(narrativeStyle)]
     );
 
@@ -1317,7 +1368,7 @@ app.put('/api/canon/world', async (req, res) => {
     await pool.query(
       `INSERT INTO settings (key, value)
        VALUES ('canon.world', $1::jsonb)
-       ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+       ON CONFLICT (sid, key) DO UPDATE SET value = EXCLUDED.value`,
       [JSON.stringify(world)]
     );
     res.json({ ok: true });
@@ -1408,11 +1459,11 @@ app.post('/api/memory/save', async (req, res) => {
     const finalSid = sid || 'main';
 
     // 🔐 Sauvegarde ou mise à jour dans PostgreSQL
-    await db.query(
+    await pool.query(
       `
       INSERT INTO memories (sid, key, value, updated_at)
       VALUES ($1, $2, $3, NOW())
-      ON CONFLICT (key)
+      ON CONFLICT (sid, key)
       DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
       `,
       [finalSid, realKey, typeof realValue === 'string' ? realValue : JSON.stringify(realValue)]
@@ -1544,3 +1595,40 @@ app.listen(port, () => {
 
 
 
+Symbols
+Find definitions and references for functions and other symbols in this file by clicking a symbol below or in the code.
+Filter symbols
+r
+func
+log
+func
+deepMerge
+func
+stripLockedPatch
+func
+fingerprint
+func
+hashToInt
+func
+decorateEmojiForPnj
+func
+compactCard
+func
+continuityDossier
+func
+getOrInitSession
+func
+saveSession
+func
+loadPnjsByIds
+func
+hydrateSessionPnjs
+func
+sqlNotDeleted
+func
+sqlCanonOnly
+func
+toKey
+func
+score
+ 
