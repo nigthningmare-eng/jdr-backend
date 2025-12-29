@@ -579,34 +579,68 @@ app.get('/api/pnjs/:id', async (req, res) => {
 app.patch('/api/pnjs/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    let patch = req.body;
 
-    if (!patch && typeof req.body === "object") patch = req.body;
-    if (!patch || Object.keys(patch).length === 0)
+    // ✅ body safe
+    const body = (req.body && typeof req.body === 'object') ? req.body : {};
+
+    // ✅ support 2 formats:
+    // A) direct:  { adminOverride: true, ultimateSkills: [] }
+    // B) wrapped: { adminOverride: true, patch: { ultimateSkills: [] } }
+    const isAdminOverride = body.adminOverride === true;
+    let patch = (body.patch && typeof body.patch === 'object') ? body.patch : body;
+
+    // ⚠️ ne jamais autoriser à changer l'id via patch
+    if (patch && typeof patch === 'object' && 'id' in patch) delete patch.id;
+
+    // garde adminOverride hors des données persistées
+    if (patch && typeof patch === 'object' && 'adminOverride' in patch) delete patch.adminOverride;
+
+    if (!patch || typeof patch !== 'object' || Object.keys(patch).length === 0) {
       return res.status(400).json({ ok: false, message: "Aucune donnée à modifier." });
+    }
 
     // 🔍 Récupère le PNJ existant
     const existing = await pool.query("SELECT data FROM pnjs WHERE id = $1", [id]);
-    if (existing.rows.length === 0)
+    if (existing.rows.length === 0) {
       return res.status(404).json({ ok: false, message: `PNJ ${id} introuvable.` });
+    }
 
     const currentData = existing.rows[0].data || {};
-    const locked = currentData.lockedTraits || [];
 
-    // ✅ AUTO ADMIN OVERRIDE - PLUS DE BLOCAGE !
-    console.log('PNJ PATCH', id, 'mis à jour:', Object.keys(patch).join(', '));
-    console.log('Locked traits (ignorés):', locked);
+    // ✅ applique lockedTraits sauf adminOverride
+    // stripLockedPatch doit renvoyer { patch: <objet nettoyé>, locked: <array> } si possible
+    // Si ton stripLockedPatch renvoie juste l'objet patch nettoyé, on s'adapte.
+    const stripped = stripLockedPatch(currentData, patch, isAdminOverride);
+    const cleanedPatch = (stripped && stripped.patch) ? stripped.patch : stripped;
+    const locked = (stripped && stripped.locked) ? stripped.locked : [];
+
+    if (!cleanedPatch || typeof cleanedPatch !== 'object' || Object.keys(cleanedPatch).length === 0) {
+      return res.status(400).json({
+        ok: false,
+        message: isAdminOverride
+          ? "Aucune donnée applicable après nettoyage."
+          : "Aucune donnée applicable (champs verrouillés). Ajoute adminOverride:true si nécessaire.",
+        lockedTraitsIgnored: locked
+      });
+    }
+
+    // (optionnel) logs utiles
+    console.log('PNJ PATCH', id, 'keys:', Object.keys(cleanedPatch).join(', '));
+    if (locked.length) console.log('Locked traits (ignorés):', locked);
 
     // 🧠 Corrige les champs mal placés (comme 'statut' ou 'race')
-    const nestedFix = { ...patch };
+    // IMPORTANT: on part du patch nettoyé
+    const nestedFix = { ...cleanedPatch };
     for (const key of ["statut", "race", "royaume", "compétence ultime"]) {
-      if (nestedFix[key]) {
-        if (!currentData.stats) currentData.stats = {};
-        currentData.stats[key] = nestedFix[key];
+      if (nestedFix[key] != null && nestedFix[key] !== "") {
+        const nextStats = { ...(currentData.stats || {}) };
+        nextStats[key] = nestedFix[key];
+        currentData.stats = nextStats;
         delete nestedFix[key];
       }
     }
 
+    // ✅ merge final
     const mergedData = { ...currentData, ...nestedFix };
 
     const payload = JSON.stringify(mergedData);
@@ -620,7 +654,7 @@ app.patch('/api/pnjs/:id', async (req, res) => {
 
     console.log('✅ PNJ PATCH', id, 'SUCCESS');
 
-    // Rafraîchir le moteur
+    // Rafraîchir le moteur (non bloquant)
     try {
       await fetch('https://jdr-backend.onrender.com/api/engine/refresh', {
         method: 'POST',
@@ -635,6 +669,7 @@ app.patch('/api/pnjs/:id', async (req, res) => {
       ok: true,
       id,
       message: "✅ PNJ mis à jour avec succès (intelligent merge).",
+      lockedTraitsIgnored: locked,
       data: result.rows[0].data,
     });
   } catch (err) {
@@ -1495,6 +1530,7 @@ app.get('/v1/models', (req, res) => {
 app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
+
 
 
 
