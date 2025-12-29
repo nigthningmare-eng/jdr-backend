@@ -1,44 +1,4 @@
-Skip to content
-Navigation Menu
-nigthningmare-eng
-jdr-backend
 
-Type / to search
-Code
-Issues
-Pull requests
-Actions
-Projects
-Wiki
-Security
-Insights
-Settings
-Files
-Go to file
-t
-jdr-backend
-package-lock.json
-package.json
-pnjs.json
-races.json
-server.js
-storyState.json
-jdr-backend
-/server.js
-nigthningmare-eng
-nigthningmare-eng
-Update server.js
-a5c6628
- · 
-now
-jdr-backend
-/server.js
-
-Code
-
-Blame
-1546 lines (1280 loc) · 50.2 KB
-function compactCard(p) {
 // ==== JDR Backend (PNJ Postgres + Moteur contexte + Canon + Mémoire + Proxy ST) ====
 const express = require('express');
 const cors = require('cors');
@@ -1582,53 +1542,5 @@ app.listen(port, () => {
   console.log(`JDR API en ligne sur http://localhost:${port}`);
 });
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-Symbols
-Find definitions and references for functions and other symbols in this file by clicking a symbol below or in the code.
-Filter symbols
-r
-func
-log
-func
-deepMerge
-func
-stripLockedPatch
-func
-fingerprint
-func
-hashToInt
-func
-decorateEmojiForPnj
-func
-compactCard
-func
-continuityDossier
-func
-getOrInitSession
-func
-saveSession
-func
-loadPnjsByIds
-func
-hydrateSessionPnjs
-func
-sqlNotDeleted
-func
-sqlCanonOnly
-func
-toKey
-func
-score
  
+
