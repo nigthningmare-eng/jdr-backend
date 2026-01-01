@@ -310,7 +310,89 @@ app.get('/api/pnjs/names', async (req, res) => {
     res.status(500).json({ message: 'DB error' });
   }
 });
+// SEARCH multi-critères (name / race / kingdom / location / faction)
+app.get('/api/pnjs/search', async (req, res) => {
+  res.set('Content-Type', 'application/json; charset=utf-8');
 
+  const limitMax = 200;
+  const limit = Math.min(parseInt(req.query.limit || '50', 10), limitMax);
+  const offset = Math.max(parseInt(req.query.offset || '0', 10), 0);
+
+  const q = (req.query.q || '').toString().trim() || null;
+  const name = (req.query.name || '').toString().trim() || null;
+  const race = (req.query.race || '').toString().trim() || null;
+  const kingdom = (req.query.kingdom || '').toString().trim() || null;
+  const location = (req.query.location || '').toString().trim() || null;
+  const faction = (req.query.faction || '').toString().trim() || null;
+
+  const includeDeleted = String(req.query.includeDeleted || '').toLowerCase() === 'true';
+  const includeDrafts = String(req.query.includeDrafts || '').toLowerCase() === 'true'; // (réservé si tu veux filtrer un jour)
+
+  try {
+    const wheres = [];
+    const params = [];
+
+    if (!includeDeleted) wheres.push(sqlNotDeleted('data'));
+    // Pas de filtre canon : tu veux tout utiliser (canon ou non)
+
+    // helper: ajoute un ILIKE paramétré
+    function addILike(expr, value) {
+      params.push(`%${value}%`);
+      wheres.push(`${expr} ILIKE $${params.length}`);
+    }
+
+    // Recherche "q" (texte libre) : OR sur plusieurs champs
+    if (q) {
+      params.push(`%${q}%`);
+      const p = `$${params.length}`;
+      wheres.push(`(
+        COALESCE(data->>'name','') ILIKE ${p}
+        OR COALESCE(data->>'description','') ILIKE ${p}
+        OR COALESCE(data->>'race', data->>'species','') ILIKE ${p}
+        OR COALESCE(data->>'kingdom', data->>'realm', data->>'royaume','') ILIKE ${p}
+        OR COALESCE(data->>'locationId', data->>'location','') ILIKE ${p}
+        OR COALESCE(data->>'faction','') ILIKE ${p}
+      )`);
+    }
+
+    // Filtres dédiés (AND cumulables)
+    if (name)    addILike(`COALESCE(data->>'name','')`, name);
+    if (race)    addILike(`COALESCE(data->>'race', data->>'species','')`, race);
+    if (kingdom) addILike(`COALESCE(data->>'kingdom', data->>'realm', data->>'royaume','')`, kingdom);
+    if (location) addILike(`COALESCE(data->>'locationId', data->>'location','')`, location);
+    if (faction) addILike(`COALESCE(data->>'faction','')`, faction);
+
+    const whereSql = wheres.length ? `WHERE ${wheres.join(' AND ')}` : '';
+
+    const totalR = await pool.query(
+      `SELECT COUNT(*)::int AS n FROM pnjs ${whereSql}`,
+      params
+    );
+    const total = totalR.rows[0].n;
+
+    const listParams = [...params, limit, offset];
+    const { rows } = await pool.query(
+      `SELECT data FROM pnjs ${whereSql}
+       ORDER BY (data->>'name') NULLS LAST, id
+       LIMIT $${listParams.length - 1} OFFSET $${listParams.length}`,
+      listParams
+    );
+
+    const items = rows.map(r => r.data);
+
+    res.status(200).json({
+      ok: true,
+      total,
+      limit,
+      offset,
+      hasMore: offset + items.length < total,
+      items
+    });
+  } catch (e) {
+    console.error('GET /api/pnjs/search error:', e);
+    res.status(500).json({ ok: false, message: 'DB error', details: e.message });
+  }
+});
 // LISTE complète (admin-friendly)
 app.get('/api/pnjs', async (req, res) => {
   res.set('Content-Type', 'application/json; charset=utf-8');
@@ -513,6 +595,7 @@ app.get('/api/pnjs/by-name', async (req, res) => {
     res.status(500).json({ matches: [], message: 'DB error' });
   }
 });
+
 
 // ================================================
 // 🔮 ROUTES PNJ — CRUD COMPLET POUR BASE POSTGRESQL
@@ -1558,5 +1641,6 @@ app.listen(port, () => {
 });
 
  
+
 
 
