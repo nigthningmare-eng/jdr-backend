@@ -360,6 +360,80 @@ app.patch("/api/pnjs/:id", async (req, res) => {
     res.status(500).json({ ok: false, message: err.message });
   }
 });
+// ✅ PUT BULK FULL REPLACE (remplace entièrement plusieurs fiches)
+// ⚠️ doit être déclaré AVANT /api/pnjs/:id
+app.put("/api/pnjs/bulk", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const items = Array.isArray(body.items) ? body.items : []; // [{id, data}, ...]
+    if (!items.length) return res.status(400).json({ ok: false, message: "items requis" });
+
+    const results = [];
+    for (const it of items) {
+      const id = String(it.id || "").trim();
+      const data = it.data && typeof it.data === "object" ? it.data : null;
+      if (!id || !data) {
+        results.push({ id: id || null, ok: false, error: "Missing id/data" });
+        continue;
+      }
+      if ("id" in data) delete data.id;
+
+      const existing = await pool.query("SELECT 1 FROM pnjs WHERE id = $1", [id]);
+      if (existing.rows.length === 0) {
+        results.push({ id, ok: false, error: "PNJ introuvable" });
+        continue;
+      }
+
+      await pool.query(
+        "UPDATE pnjs SET data = jsonb_strip_nulls($1::jsonb) WHERE id = $2",
+        [JSON.stringify(data), id]
+      );
+
+      results.push({ id, ok: true });
+    }
+
+    await refreshAllSessions();
+    res.json({ ok: true, results });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: e.message });
+  }
+});
+
+// ✅ PUT FULL REPLACE (remplace data entièrement)
+app.put("/api/pnjs/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const data = body.data && typeof body.data === "object" ? body.data : body; // accepte {data:{...}} ou direct
+
+    if (!data || typeof data !== "object" || Object.keys(data).length === 0) {
+      return res.status(400).json({ ok: false, message: "data requis (objet non vide)" });
+    }
+
+    const existing = await pool.query("SELECT data FROM pnjs WHERE id = $1", [id]);
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ ok: false, message: `PNJ ${id} introuvable.` });
+    }
+
+    if ("id" in data) delete data.id;
+
+    const result = await pool.query(
+      "UPDATE pnjs SET data = jsonb_strip_nulls($1::jsonb) WHERE id = $2 RETURNING data",
+      [JSON.stringify(data), id]
+    );
+
+    await refreshAllSessions();
+
+    res.json({
+      ok: true,
+      id,
+      message: "✅ PNJ remplacé entièrement (full replace).",
+      data: result.rows[0].data,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: e.message });
+  }
+});
 
 // BULK PATCH (modifier plusieurs fiches)
 app.patch("/api/pnjs/bulk", async (req, res) => {
@@ -676,3 +750,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ JDR API en ligne sur http://localhost:${PORT}`);
 });
+
